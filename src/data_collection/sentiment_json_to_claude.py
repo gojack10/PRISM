@@ -4,6 +4,7 @@ import logging
 from dotenv import load_dotenv
 import anthropic
 from datetime import datetime
+import yaml
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +21,9 @@ def load_latest_json(directory):
         return json.load(file)
 
 SYSTEM_PROMPT = """
-You are an AI financial analyst tasked with processing market sentiment data for machine learning input. Analyze the given data from news articles about stocks and provide a structured output. Follow these instructions:
+You are an AI financial analyst tasked with processing market sentiment data for machine learning input. Analyze the given data from news articles about stocks and provide a structured output.
+
+Follow these instructions:
 
 1. Calculate precise sentiment scores on a scale of -1 to 1 for each stock.
 2. Identify the top 5 most important topics for each stock, assigning a relevance score (0-1) to each.
@@ -33,19 +36,19 @@ Format your output as a JSON object with the following structure:
 
 {
   "stocks": {
-    "AAPL": {
+    "EXAMPLETICKER1": {
       "sentiment_score": number,
       "key_topics": [{"topic": string, "relevance": number}],
       "sentiment_change": {"time_period": string, "change_percentage": number},
       "financial_metrics": {"metric_name": number}
     },
-    "NVDA": {
+    "EXAMPLETICKER2": {
       "sentiment_score": number,
       "key_topics": [{"topic": string, "relevance": number}],
       "sentiment_change": {"time_period": string, "change_percentage": number},
       "financial_metrics": {"metric_name": number}
     },
-    "GOOG": {
+    "EXAMPLETICKER3": {
       "sentiment_score": number,
       "key_topics": [{"topic": string, "relevance": number}],
       "sentiment_change": {"time_period": string, "change_percentage": number},
@@ -59,8 +62,16 @@ Format your output as a JSON object with the following structure:
 Ensure all data is numerical where possible. Do not include any text outside of the JSON object in your response.
 """
 
+def load_config():
+    config_path = os.path.join(project_root, 'config', 'config.yaml')
+    with open(config_path, 'r') as config_file:
+        return yaml.safe_load(config_file)
+
 # send to claude
 def analyze_with_claude(data):
+    config = load_config()
+    tickers = config['tickers']
+
     api_key = os.getenv('ANTHROPIC_API_KEY')
     if not api_key:
         logger.error("ANTHROPIC_API_KEY not found in environment variables")
@@ -69,13 +80,16 @@ def analyze_with_claude(data):
     logger.info(f"Initializing Anthropic client with API key: {api_key[:5]}...")
     client = anthropic.Anthropic(api_key=api_key)
 
+    # modify the system prompt to include the tickers from config.yaml
+    system_prompt = SYSTEM_PROMPT + f"\n\nAnalyze the following tickers: {', '.join(tickers)}. These tickers are specified in the config.yaml file."
+
     try:
         logger.info("Sending request to Claude API...")
         message = client.messages.create(
             model="claude-3-sonnet-20240229",
             max_tokens=4000,
             temperature=0,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[
                 {"role": "user", "content": json.dumps(data)}
             ]

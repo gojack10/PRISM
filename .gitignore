@@ -3,3 +3,4 @@
 
 # Ignore .env file in the config folder
 /config/.env
+/config/config.yaml

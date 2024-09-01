@@ -7,6 +7,7 @@ import time
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+import yaml
 
 # path to the .env file
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,10 +23,13 @@ ALPHA_VANTAGE_BASE_URL = os.getenv('ALPHA_VANTAGE_BASE_URL')
 print(f"API Key: {ALPHA_VANTAGE_API_KEY}")
 print(f"Base URL: {ALPHA_VANTAGE_BASE_URL}")
 
-# setup logging
+# logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-STOCK_TICKERS = ['AAPL','NVDA', 'GOOG']
+with open('PRISM/config/config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file)
+
+STOCK_TICKERS = config['tickers']
 
 def make_alpha_vantage_call(tickers: List[str], topics: Optional[List[str]] = None, 
                             time_from: Optional[str] = None, time_to: Optional[str] = None, 
