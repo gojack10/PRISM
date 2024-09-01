@@ -8,27 +8,24 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-# Construct the path to the .env file
+# path to the .env file
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
 dotenv_path = os.path.join(project_root, 'config', '.env')
 
-# Load environment variables from .env file
+# load environment variables from .env file
 load_dotenv(dotenv_path)
 
-# Get environment variables
 ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
 ALPHA_VANTAGE_BASE_URL = os.getenv('ALPHA_VANTAGE_BASE_URL')
 
-# Debug print (remove in production)
 print(f"API Key: {ALPHA_VANTAGE_API_KEY}")
 print(f"Base URL: {ALPHA_VANTAGE_BASE_URL}")
 
-# Setup logging
+# setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Define list of stock tickers (example)
-STOCK_TICKERS = ['AAPL','NVDA']  # Add more as needed
+STOCK_TICKERS = ['AAPL','NVDA', 'GOOG']
 
 def make_alpha_vantage_call(tickers: List[str], topics: Optional[List[str]] = None, 
                             time_from: Optional[str] = None, time_to: Optional[str] = None, 
@@ -88,7 +85,6 @@ def process_news_sentiment(json_response: Dict[str, Any]) -> pd.DataFrame:
             'overall_sentiment_label': entry.get('overall_sentiment_label'),
         }
         
-        # Extract ticker-specific sentiment scores
         for ticker_sentiment in entry.get('ticker_sentiment', []):
             ticker = ticker_sentiment.get('ticker')
             article_data[f'{ticker}_relevance_score'] = ticker_sentiment.get('relevance_score')
@@ -127,7 +123,6 @@ def process_data(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Process the raw data before saving. You can add any transformations here.
     """
-    # For now, we're just returning the data as-is
     return data
 
 def main() -> None:
@@ -142,11 +137,9 @@ def main() -> None:
             logging.error(f"Failed to retrieve data for ticker: {ticker}")
     
     if all_data:
-        # Create the raw data directory if it doesn't exist
         raw_data_dir = os.path.join(project_root, 'data', 'raw')
         os.makedirs(raw_data_dir, exist_ok=True)
-        
-        # Generate a filename with the current timestamp
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"alpha_vantage_data_{timestamp}.json"
         file_path = os.path.join(raw_data_dir, filename)
