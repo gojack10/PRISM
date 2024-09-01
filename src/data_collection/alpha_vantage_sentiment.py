@@ -60,12 +60,7 @@ def make_alpha_vantage_call(tickers: List[str], topics: Optional[List[str]] = No
         response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as e:
-        if response.status_code == 429:
-            logging.warning("Rate limit reached. Waiting for 60 seconds before retrying.")
-            time.sleep(60)
-            return make_alpha_vantage_call(tickers, topics, time_from, time_to, sort, limit)
-        else:
-            logging.error(f"HTTP error occurred: {e}")
+        logging.error(f"HTTP error occurred: {e}")
     except Exception as e:
         logging.error(f"An error occurred: {e}")
     
@@ -141,7 +136,7 @@ def main() -> None:
             logging.error(f"Failed to retrieve data for ticker: {ticker}")
     
     if all_data:
-        raw_data_dir = os.path.join(project_root, 'data', 'raw')
+        raw_data_dir = os.path.join(project_root, 'data', 'raw', 'sentiment')
         os.makedirs(raw_data_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

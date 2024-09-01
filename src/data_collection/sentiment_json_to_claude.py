@@ -133,7 +133,7 @@ def main():
         logger.info("Starting analysis with Claude")
         analysis = analyze_with_claude(data)
 
-        processed_data_dir = os.path.join(project_root, 'data', 'raw')
+        processed_data_dir = os.path.join(project_root, 'data', 'raw', 'sentiment', 'claude')
         os.makedirs(processed_data_dir, exist_ok=True)
         output_file = f'claude_analysis_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
         output_path = os.path.join(processed_data_dir, output_file)
