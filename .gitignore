@@ -1,0 +1,5 @@
+# Ignore everything in the data folders
+/data/
+
+# Ignore .env file in the config folder
+/config/.env
