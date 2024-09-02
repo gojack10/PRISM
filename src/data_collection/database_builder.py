@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 import yaml
 import logging
-from typing import List, Dict
+from typing import List, Dict, Any
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -21,11 +21,17 @@ DB_PATH = os.path.join(project_root, 'data', 'processed', 'market_data.db')
 RAW_DATA_DIR = os.path.join(project_root, 'data', 'raw')
 PROCESSED_DATA_DIR = os.path.join(project_root, 'data', 'processed')
 
+# define indicators
+INDICATORS = ['SMA', 'MACD', 'RSI', 'BBANDS', 'OBV', 'CCI']
+
 def connect_to_database() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
 def get_historical_table_name(ticker: str) -> str:
-    return f"historical_data_daily_{ticker.lower().replace('.', '_')}"
+    return f"intraday_{ticker.lower().replace('.', '_')}"
+
+def get_indicator_table_name(ticker: str, indicator: str) -> str:
+    return f"indicator_{indicator.lower()}_{ticker.lower().replace('.', '_')}"
 
 def create_tables(conn: sqlite3.Connection):
     cursor = conn.cursor()
@@ -93,6 +99,44 @@ def create_historical_table(conn: sqlite3.Connection, ticker: str):
     
     conn.commit()
 
+def create_indicator_table(conn: sqlite3.Connection, ticker: str, indicator: str):
+    cursor = conn.cursor()
+    table_name = get_indicator_table_name(ticker, indicator)
+    
+    if indicator == 'BBANDS':
+        cursor.execute(f'''
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            date TEXT,
+            ticker TEXT,
+            real_upper_band REAL,
+            real_middle_band REAL,
+            real_lower_band REAL,
+            PRIMARY KEY (date, ticker)
+        )
+        ''')
+    elif indicator == 'MACD':
+        cursor.execute(f'''
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            date TEXT,
+            ticker TEXT,
+            macd REAL,
+            macd_hist REAL,
+            macd_signal REAL,
+            PRIMARY KEY (date, ticker)
+        )
+        ''')
+    else:
+        cursor.execute(f'''
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            date TEXT,
+            ticker TEXT,
+            value REAL,
+            PRIMARY KEY (date, ticker)
+        )
+        ''')
+    
+    conn.commit()
+
 def insert_historical_data(conn: sqlite3.Connection, ticker: str, data: List[Dict]):
     cursor = conn.cursor()
     table_name = get_historical_table_name(ticker)
@@ -103,6 +147,45 @@ def insert_historical_data(conn: sqlite3.Connection, ticker: str, data: List[Dic
         (date, ticker, open, high, low, close, volume)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (row['date'], ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
+    
+    conn.commit()
+
+def insert_indicator_data(conn: sqlite3.Connection, ticker: str, indicator: str, data: Dict):
+    cursor = conn.cursor()
+    table_name = get_indicator_table_name(ticker, indicator)
+    
+    for date, values in data['Technical Analysis'].items():
+        if indicator == 'BBANDS':
+            cursor.execute(f'''
+            INSERT OR REPLACE INTO {table_name}
+            (date, ticker, real_upper_band, real_middle_band, real_lower_band)
+            VALUES (?, ?, ?, ?, ?)
+            ''', (date, ticker, values['Real Upper Band'], values['Real Middle Band'], values['Real Lower Band']))
+        elif indicator == 'MACD':
+            cursor.execute(f'''
+            INSERT OR REPLACE INTO {table_name}
+            (date, ticker, macd, macd_hist, macd_signal)
+            VALUES (?, ?, ?, ?, ?)
+            ''', (date, ticker, values['MACD'], values['MACD_Hist'], values['MACD_Signal']))
+        else:
+            cursor.execute(f'''
+            INSERT OR REPLACE INTO {table_name}
+            (date, ticker, value)
+            VALUES (?, ?, ?)
+            ''', (date, ticker, list(values.values())[0]))
+    
+    conn.commit()
+
+def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    INSERT OR REPLACE INTO stock_sentiment
+    (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (data['date'], data['ticker'], data['sentiment_score'], 
+          json.dumps(data['key_topics']), data['sentiment_change'], 
+          json.dumps(data['financial_metrics'])))
     
     conn.commit()
 
@@ -210,7 +293,7 @@ def update_historical_data(conn: sqlite3.Connection):
         total_rows += count
         logging.info(f"Number of rows in {table_name}: {count}")
 
-    logging.info(f"Total number of rows across all historical data tables: {total_rows}")
+    logging.info(f"Total number of rows across all intraday data tables: {total_rows}")
 
     # Check the most recent data
     for ticker in STOCK_TICKERS:
@@ -227,56 +310,138 @@ def update_historical_data(conn: sqlite3.Connection):
 
     logging.info("Finished update_historical_data function")
 
+def update_indicator_data(conn: sqlite3.Connection):
+    cursor = conn.cursor()
+    indicators_dir = os.path.join(RAW_DATA_DIR, 'indicators')
+    
+    for indicator in INDICATORS:
+        historical_dir = os.path.join(indicators_dir, 'historical', indicator)
+        daily_update_dir = os.path.join(indicators_dir, 'daily_update', indicator)
+        
+        for ticker in STOCK_TICKERS:
+            create_indicator_table(conn, ticker, indicator)
+            table_name = get_indicator_table_name(ticker, indicator)
+            
+            # check if historical data exists in the database
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                # load historical data
+                historical_file = os.path.join(historical_dir, f"{ticker}_{indicator}_*.json")
+                historical_files = [f for f in os.listdir(historical_dir) if f.startswith(f"{ticker}_{indicator}_")]
+                
+                if historical_files:
+                    with open(os.path.join(historical_dir, historical_files[0]), 'r') as f:
+                        data = json.load(f)
+                    insert_indicator_data(conn, ticker, indicator, data)
+                    logging.info(f"Inserted historical {indicator} data for {ticker}")
+            
+            # load daily update
+            daily_update_file = os.path.join(daily_update_dir, f"{ticker}_{indicator}_*.json")
+            daily_update_files = [f for f in os.listdir(daily_update_dir) if f.startswith(f"{ticker}_{indicator}_")]
+            
+            if daily_update_files:
+                latest_file = max(daily_update_files)
+                date_str = latest_file.split('_')[-1].split('.')[0]
+                
+                # check if the latest daily update is already in the database
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE date = ?", (date_str,))
+                count = cursor.fetchone()[0]
+                
+                if count == 0:
+                    with open(os.path.join(daily_update_dir, latest_file), 'r') as f:
+                        data = json.load(f)
+                    insert_indicator_data(conn, ticker, indicator, data)
+                    logging.info(f"Inserted daily update {indicator} data for {ticker} on {date_str}")
+                else:
+                    logging.info(f"Daily update {indicator} data for {ticker} on {date_str} already exists in the database")
+    
+    conn.commit()
+    logging.info("Indicator data updated successfully.")
+
 def update_sentiment_data(conn: sqlite3.Connection):
     cursor = conn.cursor()
     sentiment_dir = os.path.join(RAW_DATA_DIR, 'sentiment', 'claude')
     
+    logging.info(f"Starting update_sentiment_data function")
+    logging.info(f"Sentiment directory: {sentiment_dir}")
+
+    if not os.path.exists(sentiment_dir):
+        logging.warning(f"Sentiment directory not found: {sentiment_dir}")
+        return
+
     for file in os.listdir(sentiment_dir):
         if file.endswith('.json'):
-            with open(os.path.join(sentiment_dir, file), 'r') as f:
-                data = json.load(f)
-            
-            # extract date from filename and format it
-            date_str = file.split('_')[2].split('.')[0]  # extract date from filename
-            date = datetime.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d')
-            
-            # update market_drivers
-            for driver in data['market_drivers']:
+            file_path = os.path.join(sentiment_dir, file)
+            logging.info(f"Processing sentiment file: {file_path}")
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                
+                # extract date from filename and format it
+                date_str = file.split('_')[2].split('.')[0]  # extract date from filename
+                date = datetime.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d')
+                
+                # update market_drivers
+                for driver in data['market_drivers']:
+                    cursor.execute('''
+                    INSERT OR REPLACE INTO market_drivers (date, driver, impact_score)
+                    VALUES (?, ?, ?)
+                    ''', (date, driver['driver'], driver['impact_score']))
+                
+                # update stock_comparison
                 cursor.execute('''
-                INSERT OR REPLACE INTO market_drivers (date, driver, impact_score)
+                INSERT OR REPLACE INTO stock_comparison 
+                (date, sentiment_difference, topic_overlap_percentage)
                 VALUES (?, ?, ?)
-                ''', (date, driver['driver'], driver['impact_score']))
-            
-            # update stock_comparison
-            cursor.execute('''
-            INSERT OR REPLACE INTO stock_comparison 
-            (date, sentiment_difference, topic_overlap_percentage)
-            VALUES (?, ?, ?)
-            ''', (date, data['stock_comparison']['sentiment_difference'], 
-                  data['stock_comparison']['topic_overlap_percentage']))
-            
-            # update stock_sentiment
-            for ticker, stock_data in data['stocks'].items():
-                cursor.execute('''
-                INSERT OR REPLACE INTO stock_sentiment
-                (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ''', (date, ticker, stock_data['sentiment_score'], 
-                      json.dumps(stock_data['key_topics']),
-                      stock_data['sentiment_change']['change_percentage'],
-                      json.dumps(stock_data['financial_metrics'])))
+                ''', (date, data['stock_comparison']['sentiment_difference'], 
+                      data['stock_comparison']['topic_overlap_percentage']))
+                
+                # update stock_sentiment
+                for ticker, stock_data in data['stocks'].items():
+                    cursor.execute('''
+                    INSERT OR REPLACE INTO stock_sentiment
+                    (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (date, ticker, stock_data['sentiment_score'], 
+                          json.dumps(stock_data['key_topics']),
+                          stock_data['sentiment_change']['change_percentage'],
+                          json.dumps(stock_data['financial_metrics'])))
+                
+                logging.info(f"Processed sentiment data for date: {date}")
+            except Exception as e:
+                logging.error(f"Error processing sentiment file {file}: {str(e)}")
     
     conn.commit()
     logging.info("Sentiment data updated successfully.")
+
+def rename_existing_tables(conn: sqlite3.Connection):
+    cursor = conn.cursor()
+    
+    # get all table names
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+    
+    for (table_name,) in tables:
+        if table_name.startswith('historical_data_daily_'):
+            new_name = 'intraday_' + table_name.split('_')[-1]
+            cursor.execute(f"ALTER TABLE {table_name} RENAME TO {new_name}")
+            logging.info(f"renamed table {table_name} to {new_name}")
+    
+    conn.commit()
+    logging.info("finished renaming existing tables")
 
 def main():
     today = datetime.now().strftime('%Y-%m-%d')
     
     conn = connect_to_database()
     create_tables(conn)
+    rename_existing_tables(conn)
     
     try:
         update_historical_data(conn)
+        update_indicator_data(conn)
         update_sentiment_data(conn)
         logging.info("Database updated successfully.")
     except Exception as e:
