@@ -36,19 +36,9 @@ def get_indicator_table_name(ticker: str, indicator: str) -> str:
 def create_tables(conn: sqlite3.Connection):
     cursor = conn.cursor()
 
-    # create tickers table
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS tickers (
-        ticker TEXT PRIMARY KEY,
-        name TEXT,
-        sector TEXT,
-        industry TEXT
-    )
-    ''')
-
     # create market_drivers table
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS market_drivers (
+    CREATE TABLE IF NOT EXISTS sentiment_market_drivers (
         date TEXT,
         driver TEXT,
         impact_score REAL,
@@ -58,7 +48,7 @@ def create_tables(conn: sqlite3.Connection):
 
     # create stock_comparison table
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS stock_comparison (
+    CREATE TABLE IF NOT EXISTS sentiment_stock_comparison (
         date TEXT PRIMARY KEY,
         sentiment_difference REAL,
         topic_overlap_percentage REAL
@@ -67,7 +57,7 @@ def create_tables(conn: sqlite3.Connection):
 
     # create stock_sentiment table
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS stock_sentiment (
+    CREATE TABLE IF NOT EXISTS sentiment_stock_sentiment (
         date TEXT,
         ticker TEXT,
         sentiment_score REAL,
@@ -180,7 +170,7 @@ def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
     cursor = conn.cursor()
     
     cursor.execute('''
-    INSERT OR REPLACE INTO stock_sentiment
+    INSERT OR REPLACE INTO sentiment_stock_sentiment
     (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
     VALUES (?, ?, ?, ?, ?, ?)
     ''', (data['date'], data['ticker'], data['sentiment_score'], 
@@ -386,13 +376,13 @@ def update_sentiment_data(conn: sqlite3.Connection):
                 # update market_drivers
                 for driver in data['market_drivers']:
                     cursor.execute('''
-                    INSERT OR REPLACE INTO market_drivers (date, driver, impact_score)
+                    INSERT OR REPLACE INTO sentiment_market_drivers (date, driver, impact_score)
                     VALUES (?, ?, ?)
                     ''', (date, driver['driver'], driver['impact_score']))
                 
                 # update stock_comparison
                 cursor.execute('''
-                INSERT OR REPLACE INTO stock_comparison 
+                INSERT OR REPLACE INTO sentiment_stock_comparison 
                 (date, sentiment_difference, topic_overlap_percentage)
                 VALUES (?, ?, ?)
                 ''', (date, data['stock_comparison']['sentiment_difference'], 
@@ -401,7 +391,7 @@ def update_sentiment_data(conn: sqlite3.Connection):
                 # update stock_sentiment
                 for ticker, stock_data in data['stocks'].items():
                     cursor.execute('''
-                    INSERT OR REPLACE INTO stock_sentiment
+                    INSERT OR REPLACE INTO sentiment_stock_sentiment
                     (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ''', (date, ticker, stock_data['sentiment_score'], 
