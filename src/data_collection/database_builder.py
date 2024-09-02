@@ -21,30 +21,26 @@ DB_PATH = os.path.join(project_root, 'data', 'processed', 'market_data.db')
 RAW_DATA_DIR = os.path.join(project_root, 'data', 'raw')
 PROCESSED_DATA_DIR = os.path.join(project_root, 'data', 'processed')
 
-# commented out for debugging
-# def is_market_inactive(date: str) -> bool:
-#     dt = datetime.strptime(date, '%Y-%m-%d')
-#     return dt.weekday() >= 5  # 5 and 6 are saturday and sunday
-
 def connect_to_database() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
+def get_historical_table_name(ticker: str) -> str:
+    return f"historical_data_daily_{ticker.lower().replace('.', '_')}"
+
 def create_tables(conn: sqlite3.Connection):
     cursor = conn.cursor()
-    
+
+    # create tickers table
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS historical_data_daily (
-        date TEXT,
-        ticker TEXT,
-        open REAL,
-        high REAL,
-        low REAL,
-        close REAL,
-        volume INTEGER,
-        PRIMARY KEY (date, ticker)
+    CREATE TABLE IF NOT EXISTS tickers (
+        ticker TEXT PRIMARY KEY,
+        name TEXT,
+        sector TEXT,
+        industry TEXT
     )
     ''')
-    
+
+    # create market_drivers table
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS market_drivers (
         date TEXT,
@@ -53,16 +49,17 @@ def create_tables(conn: sqlite3.Connection):
         PRIMARY KEY (date, driver)
     )
     ''')
-    
+
+    # create stock_comparison table
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS stock_comparison (
-        date TEXT,
+        date TEXT PRIMARY KEY,
         sentiment_difference REAL,
-        topic_overlap_percentage REAL,
-        PRIMARY KEY (date)
+        topic_overlap_percentage REAL
     )
     ''')
-    
+
+    # create stock_sentiment table
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS stock_sentiment (
         date TEXT,
@@ -74,127 +71,161 @@ def create_tables(conn: sqlite3.Connection):
         PRIMARY KEY (date, ticker)
     )
     ''')
+
+    conn.commit()
+
+def create_historical_table(conn: sqlite3.Connection, ticker: str):
+    cursor = conn.cursor()
+    table_name = get_historical_table_name(ticker)
+    
+    cursor.execute(f'''
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        date TEXT,
+        ticker TEXT,
+        open REAL,
+        high REAL,
+        low REAL,
+        close REAL,
+        volume INTEGER,
+        PRIMARY KEY (date, ticker)
+    )
+    ''')
+    
+    conn.commit()
+
+def insert_historical_data(conn: sqlite3.Connection, ticker: str, data: List[Dict]):
+    cursor = conn.cursor()
+    table_name = get_historical_table_name(ticker)
+    
+    for row in data:
+        cursor.execute(f'''
+        INSERT OR REPLACE INTO {table_name}
+        (date, ticker, open, high, low, close, volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (row['date'], ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
     
     conn.commit()
 
 def update_historical_data(conn: sqlite3.Connection):
     cursor = conn.cursor()
-    historical_dir = os.path.join(RAW_DATA_DIR, 'historical')
-    past_dir = os.path.join(historical_dir, 'past')
-    daily_update_dir = os.path.join(historical_dir, 'daily_update')
+    intraday_dir = os.path.join(RAW_DATA_DIR, 'intraday')
+    past_dir = os.path.join(intraday_dir, 'past')
+    daily_update_dir = os.path.join(intraday_dir, 'daily_update')
     
-    logging.info("Starting update_historical_data function")
+    logging.info(f"Starting update_historical_data function")
+    logging.info(f"intraday_dir: {intraday_dir}")
+    logging.info(f"past_dir: {past_dir}")
+    logging.info(f"daily_update_dir: {daily_update_dir}")
 
-    cursor.execute("SELECT COUNT(*) FROM historical_data_daily")
-    count = cursor.fetchone()[0]
-    logging.info(f"Current number of rows in historical_data_daily: {count}")
-
-    if count == 0:
-        logging.info(f"Database is empty. Loading historical data from {past_dir}")
-        for file in os.listdir(past_dir):
-            if file.endswith('.csv'):
-                ticker = file.split('_')[0]
-                file_path = os.path.join(past_dir, file)
-                try:
-                    df = pd.read_csv(file_path)
-                    df = df.rename(columns={
-                        'Date': 'date',
-                        'Open': 'open',
-                        'High': 'high',
-                        'Low': 'low',
-                        'Close': 'close',
-                        'Volume': 'volume'
-                    })
-                    if 'Adj Close' in df.columns:
-                        df = df.drop('Adj Close', axis=1)
-                    df['date'] = pd.to_datetime(df['date'])
-                    
-                    for _, row in df.iterrows():
-                        cursor.execute('''
-                        INSERT OR IGNORE INTO historical_data_daily
-                        (date, ticker, open, high, low, close, volume)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ''', (row['date'].strftime('%Y-%m-%d'), ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
-                    logging.info(f"Inserted historical data for {ticker}")
-                except Exception as e:
-                    logging.error(f"Error processing historical file {file}: {str(e)}")
-        conn.commit()
-        logging.info("Historical data loaded successfully")
-
+    # load data from 'past' directory
+    logging.info(f"Loading historical data from {past_dir}")
+    for file in os.listdir(past_dir):
+        if file.endswith('.csv'):
+            ticker = file.split('_')[0]
+            table_name = get_historical_table_name(ticker)
+            file_path = os.path.join(past_dir, file)
+            logging.info(f"Processing file: {file_path}")
+            try:
+                df = pd.read_csv(file_path)
+                
+                # rename columns to match our database structure
+                df = df.rename(columns={
+                    'Date': 'date',
+                    'Open': 'open',
+                    'High': 'high',
+                    'Low': 'low',
+                    'Close': 'close',
+                    'Volume': 'volume'
+                })
+                
+                # drop 'Adj Close' column if it exists
+                if 'Adj Close' in df.columns:
+                    df = df.drop('Adj Close', axis=1)
+                
+                # convert date column to datetime
+                df['date'] = pd.to_datetime(df['date'])
+                
+                # log sample data
+                logging.info(f"sample data from {file}:\n{df.head()}")
+                
+                create_historical_table(conn, ticker)  # Ensure table exists
+                
+                for _, row in df.iterrows():
+                    cursor.execute(f'''
+                    INSERT OR IGNORE INTO {table_name}
+                    (date, ticker, open, high, low, close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (row['date'].strftime('%Y-%m-%d'), ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
+                logging.info(f"Inserted data for {ticker} from {file}")
+            except Exception as e:
+                logging.error(f"Error processing {file}: {str(e)}")
+    
+    conn.commit()
+    logging.info("Historical data from 'past' directory loaded successfully.")
+    
+    # load updates from 'daily_update' directory
     logging.info(f"Loading daily updates from {daily_update_dir}")
     for file in os.listdir(daily_update_dir):
         if file.endswith('.csv'):
             ticker = file.split('_')[0]
+            table_name = get_historical_table_name(ticker)
             file_path = os.path.join(daily_update_dir, file)
+            logging.info(f"Processing file: {file_path}")
             try:
                 df = pd.read_csv(file_path)
+                logging.info(f"DataFrame shape after reading CSV: {df.shape}")
+                logging.info(f"DataFrame columns: {df.columns}")
+                logging.info(f"DataFrame dtypes:\n{df.dtypes}")
+                logging.info(f"Sample data from {file}:\n{df.to_string()}")
+                
+                # Extract date from filename
                 date_str = file.split('_')[-1].split('.')[0]
                 
-                for _, row in df.iterrows():
-                    cursor.execute('''
-                    INSERT OR REPLACE INTO historical_data_daily
-                    (date, ticker, open, high, low, close, volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (date_str, ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
-                logging.info(f"Inserted/updated data for {ticker} on {date_str}")
+                create_historical_table(conn, ticker)  # Ensure table exists
+                
+                for index, row in df.iterrows():
+                    logging.info(f"Processing row {index}: {row.to_dict()}")
+                    try:
+                        cursor.execute(f'''
+                        INSERT OR REPLACE INTO {table_name}
+                        (date, ticker, open, high, low, close, volume)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (date_str, ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
+                        logging.info(f"Executed SQL for row {index}")
+                    except Exception as e:
+                        logging.error(f"Error inserting row {index}: {str(e)}")
+                logging.info(f"Finished processing all rows for {ticker} from {file}")
             except Exception as e:
-                logging.error(f"Error processing daily update file {file}: {str(e)}")
+                logging.error(f"Error processing file {file}: {str(e)}")
     
     conn.commit()
-    logging.info("Daily updates loaded successfully")
+    logging.info("Committed changes to database")
 
-    cursor.execute("SELECT COUNT(*) FROM historical_data_daily")
-    final_count = cursor.fetchone()[0]
-    logging.info(f"Final number of rows in historical_data_daily: {final_count}")
+    # Update these checks to work with multiple tables
+    total_rows = 0
+    for ticker in STOCK_TICKERS:
+        table_name = get_historical_table_name(ticker)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        count = cursor.fetchone()[0]
+        total_rows += count
+        logging.info(f"Number of rows in {table_name}: {count}")
 
-    cursor.execute("SELECT MAX(date) FROM historical_data_daily")
-    latest_date = cursor.fetchone()[0]
-    logging.info(f"Latest date in the database: {latest_date}")
+    logging.info(f"Total number of rows across all historical data tables: {total_rows}")
+
+    # Check the most recent data
+    for ticker in STOCK_TICKERS:
+        table_name = get_historical_table_name(ticker)
+        cursor.execute(f"SELECT MAX(date) FROM {table_name}")
+        latest_date = cursor.fetchone()[0]
+        logging.info(f"Latest date for {ticker}: {latest_date}")
+
+        cursor.execute(f"SELECT * FROM {table_name} ORDER BY date DESC LIMIT 5")
+        recent_rows = cursor.fetchall()
+        logging.info(f"5 most recent rows for {ticker}:")
+        for row in recent_rows:
+            logging.info(row)
 
     logging.info("Finished update_historical_data function")
-
-def update_market_data(conn: sqlite3.Connection):
-    cursor = conn.cursor()
-    historical_dir = os.path.join(RAW_DATA_DIR, 'historical')
-    daily_dir = os.path.join(historical_dir, 'daily')
-    sentiment_dir = os.path.join(RAW_DATA_DIR, 'sentiment', 'claude')
-    
-    for file in os.listdir(daily_dir):
-        if file.endswith('.csv'):
-            ticker = file.split('_')[0]
-            df = pd.read_csv(os.path.join(daily_dir, file))
-            
-            for _, row in df.iterrows():
-                date = row['date']
-                
-                # get sentiment data
-                sentiment_file = f"sentiment_{ticker}_{date}.json"
-                sentiment_path = os.path.join(sentiment_dir, sentiment_file)
-                
-                if os.path.exists(sentiment_path):
-                    with open(sentiment_path, 'r') as f:
-                        sentiment_data = json.load(f)
-                    
-                    stock_data = sentiment_data['stocks'][ticker]
-                    
-                    cursor.execute('''
-                    INSERT OR REPLACE INTO market_data
-                    (date, ticker, open, high, low, close, volume, 
-                    sentiment_score, key_topics, sentiment_change, financial_metrics)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (date, ticker, row['open'], row['high'], row['low'], row['close'], row['volume'],
-                          stock_data['sentiment_score'], json.dumps(stock_data['key_topics']),
-                          stock_data['sentiment_change']['change_percentage'],
-                          json.dumps(stock_data['financial_metrics'])))
-                else:
-                    # if sentiment data is not available, insert only historical data
-                    cursor.execute('''
-                    INSERT OR REPLACE INTO market_data
-                    (date, ticker, open, high, low, close, volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (date, ticker, row['open'], row['high'], row['low'], row['close'], row['volume']))
-    
-    conn.commit()
 
 def update_sentiment_data(conn: sqlite3.Connection):
     cursor = conn.cursor()
@@ -212,39 +243,34 @@ def update_sentiment_data(conn: sqlite3.Connection):
             # update market_drivers
             for driver in data['market_drivers']:
                 cursor.execute('''
-                insert or replace into market_drivers (date, driver, impact_score)
-                values (?, ?, ?)
+                INSERT OR REPLACE INTO market_drivers (date, driver, impact_score)
+                VALUES (?, ?, ?)
                 ''', (date, driver['driver'], driver['impact_score']))
             
             # update stock_comparison
             cursor.execute('''
-            insert or replace into stock_comparison 
+            INSERT OR REPLACE INTO stock_comparison 
             (date, sentiment_difference, topic_overlap_percentage)
-            values (?, ?, ?)
+            VALUES (?, ?, ?)
             ''', (date, data['stock_comparison']['sentiment_difference'], 
                   data['stock_comparison']['topic_overlap_percentage']))
             
             # update stock_sentiment
             for ticker, stock_data in data['stocks'].items():
                 cursor.execute('''
-                insert or replace into stock_sentiment
+                INSERT OR REPLACE INTO stock_sentiment
                 (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
-                values (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ''', (date, ticker, stock_data['sentiment_score'], 
                       json.dumps(stock_data['key_topics']),
                       stock_data['sentiment_change']['change_percentage'],
                       json.dumps(stock_data['financial_metrics'])))
     
     conn.commit()
-    logging.info("sentiment data updated successfully.")
+    logging.info("Sentiment data updated successfully.")
 
 def main():
     today = datetime.now().strftime('%Y-%m-%d')
-    
-    # commented out for debugging
-    # if is_market_inactive(today):
-    #     logging.info(f"Market is inactive on {today}. Skipping database update.")
-    #     return
     
     conn = connect_to_database()
     create_tables(conn)
@@ -252,9 +278,9 @@ def main():
     try:
         update_historical_data(conn)
         update_sentiment_data(conn)
-        logging.info("database updated successfully.")
+        logging.info("Database updated successfully.")
     except Exception as e:
-        logging.error(f"an error occurred while updating the database: {str(e)}")
+        logging.error(f"An error occurred while updating the database: {str(e)}")
     finally:
         conn.close()
 

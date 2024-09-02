@@ -46,7 +46,7 @@ def fetch_daily_data(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 def save_to_csv(data: Dict[str, Any], symbol: str, date: str):
-    output_dir = os.path.join(project_root, 'data', 'raw', 'historical', 'daily_update')
+    output_dir = os.path.join(project_root, 'data', 'raw', 'intraday', 'daily_update')
     os.makedirs(output_dir, exist_ok=True)
     
     filename = f"{symbol}_daily_{date}.csv"
