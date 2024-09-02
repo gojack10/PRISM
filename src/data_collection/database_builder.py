@@ -68,6 +68,28 @@ def create_tables(conn: sqlite3.Connection):
     )
     ''')
 
+    # create company_overview table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS company_overview (
+        ticker TEXT,
+        date TEXT,
+        PERatio REAL,
+        PEGRatio REAL,
+        PriceToBookRatio REAL,
+        OperatingMarginTTM REAL,
+        ReturnOnEquityTTM REAL,
+        QuarterlyEarningsGrowthYOY REAL,
+        QuarterlyRevenueGrowthYOY REAL,
+        DividendYield REAL,
+        AnalystTargetPrice REAL,
+        "50DayMovingAverage" REAL,
+        "200DayMovingAverage" REAL,
+        Beta REAL,
+        MarketCapitalization REAL,
+        PRIMARY KEY (ticker, date)
+    )
+    ''')
+
     conn.commit()
 
 def create_historical_table(conn: sqlite3.Connection, ticker: str):
@@ -176,6 +198,24 @@ def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
     ''', (data['date'], data['ticker'], data['sentiment_score'], 
           json.dumps(data['key_topics']), data['sentiment_change'], 
           json.dumps(data['financial_metrics'])))
+    
+    conn.commit()
+
+def insert_company_overview_data(conn: sqlite3.Connection, ticker: str, data: Dict):
+    cursor = conn.cursor()
+    table_name = "company_overview"
+    
+    cursor.execute(f'''
+    INSERT OR REPLACE INTO {table_name}
+    (ticker, date, PERatio, PEGRatio, PriceToBookRatio, OperatingMarginTTM, ReturnOnEquityTTM, 
+    QuarterlyEarningsGrowthYOY, QuarterlyRevenueGrowthYOY, DividendYield, AnalystTargetPrice, 
+    "50DayMovingAverage", "200DayMovingAverage", Beta, MarketCapitalization)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (ticker, datetime.now().strftime('%Y-%m-%d'), data.get('PERatio'), data.get('PEGRatio'), 
+          data.get('PriceToBookRatio'), data.get('OperatingMarginTTM'), data.get('ReturnOnEquityTTM'), 
+          data.get('QuarterlyEarningsGrowthYOY'), data.get('QuarterlyRevenueGrowthYOY'), data.get('DividendYield'), 
+          data.get('AnalystTargetPrice'), data.get('50DayMovingAverage'), data.get('200DayMovingAverage'), 
+          data.get('Beta'), data.get('MarketCapitalization')))
     
     conn.commit()
 
@@ -406,6 +446,23 @@ def update_sentiment_data(conn: sqlite3.Connection):
     conn.commit()
     logging.info("Sentiment data updated successfully.")
 
+def update_company_overview_data(conn: sqlite3.Connection):
+    overview_dir = os.path.join(RAW_DATA_DIR, 'overview')
+    
+    logging.info(f"Loading company overview data from {overview_dir}")
+    for file in os.listdir(overview_dir):
+        if file.endswith('.json'):
+            ticker = file.split('_')[0]
+            file_path = os.path.join(overview_dir, file)
+            logging.info(f"Processing file: {file_path}")
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                insert_company_overview_data(conn, ticker, data)
+                logging.info(f"Inserted company overview data for {ticker} from {file}")
+            except Exception as e:
+                logging.error(f"Error processing {file}: {str(e)}")
+
 def rename_existing_tables(conn: sqlite3.Connection):
     cursor = conn.cursor()
     
@@ -433,6 +490,7 @@ def main():
         update_historical_data(conn)
         update_indicator_data(conn)
         update_sentiment_data(conn)
+        update_company_overview_data(conn)
         logging.info("Database updated successfully.")
     except Exception as e:
         logging.error(f"An error occurred while updating the database: {str(e)}")

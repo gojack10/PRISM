@@ -24,6 +24,16 @@ with open(os.path.join(project_root, 'config', 'config.yaml'), 'r') as config_fi
 
 STOCK_TICKERS = config['tickers']
 
+# Fields to keep in the cleaned JSON
+FIELDS_TO_KEEP = [
+    "PERatio", "PEGRatio", "PriceToBookRatio",
+    "OperatingMarginTTM", "ReturnOnEquityTTM",
+    "QuarterlyEarningsGrowthYOY", "QuarterlyRevenueGrowthYOY",
+    "DividendYield", "AnalystTargetPrice",
+    "50DayMovingAverage", "200DayMovingAverage",
+    "Beta", "MarketCapitalization"
+]
+
 def fetch_company_overview(symbol: str) -> dict:
     """
     Fetch company overview for a given symbol from Alpha Vantage
@@ -45,11 +55,17 @@ def fetch_company_overview(symbol: str) -> dict:
     
     return None
 
+def clean_data(data: dict) -> dict:
+    """
+    Clean the data to only include specified fields
+    """
+    return {key: data[key] for key in FIELDS_TO_KEEP if key in data}
+
 def save_to_json(data: dict, symbol: str):
     output_dir = os.path.join(project_root, 'data', 'raw', 'overview')
     os.makedirs(output_dir, exist_ok=True)
     
-    filename = f"{symbol}_overview_{datetime.now().strftime('%Y%m%d')}.json"
+    filename = f"{symbol}_overview_{datetime.now().strftime('%Y-%m-%d')}.json"
     filepath = os.path.join(output_dir, filename)
     
     with open(filepath, 'w') as f:
@@ -63,7 +79,8 @@ def main():
         data = fetch_company_overview(ticker)
         
         if data:
-            save_to_json(data, ticker)
+            cleaned_data = clean_data(data)
+            save_to_json(cleaned_data, ticker)
         else:
             logging.warning(f"No data retrieved for {ticker}")
 
