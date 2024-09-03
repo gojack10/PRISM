@@ -1,12 +1,11 @@
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-def init_model():
-    params = {
+def init_model(params=None):
+    default_params = {
         "objective": "reg:squarederror",
         "eval_metric": "rmse",
         "learning_rate": 0.01,
@@ -16,21 +15,22 @@ def init_model():
         "colsample_bytree": 0.8,
         "seed": 42,
     }
-    return params
+    if params:
+        default_params.update(params)
+    return default_params
 
-def train_model(X, y):
+def train_model(X, y, params=None):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dtest = xgb.DMatrix(X_test, label=y_test)
 
-    params = init_model()
+    model_params = init_model(params)
     watchlist = [(dtrain, "train"), (dtest, "test")]
 
-    model = xgb.train(params, dtrain, num_boost_round=800, evals=watchlist, early_stopping_rounds=50)
+    model = xgb.train(model_params, dtrain, num_boost_round=800, evals=watchlist, early_stopping_rounds=50, verbose_eval=True)
 
-    plot_feature_importance(model, X)
-    evaluate_model(model, X_test, y_test)
+    return model, X_test, y_test
 
 def plot_feature_importance(model, X):
     importance = model.get_score(importance_type='weight')
