@@ -78,70 +78,94 @@ Ensure all data is numerical where possible. Do not include any text outside of 
 If a ticker from the config is not present in the input data, include it in the output with empty or zero values.
 """
 
-    max_retries = 5
-    base_delay = 20  
+    max_retries = 10
+    base_delay = 60  # Start with a 60-second delay
     
-    for attempt in range(max_retries):
-        try:
-            logger.info("Sending request to Claude API...")
-            message = client.messages.create(
-                model="claude-3-sonnet-20240229",
-                max_tokens=4000,
-                temperature=0,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": json.dumps(data)}
-                ]
-            )
-            logger.info("Received response from Claude API")
-            
-            # log the raw response content
-            logger.debug(f"Raw response content: {message.content}")
-            
-            # check if the content is empty
-            if not message.content:
-                logger.error("Received empty content from Claude API")
-                return None
+    all_analyses = {}
+
+    for ticker in tickers:
+        ticker_data = {ticker: data.get(ticker, {})}
+        
+        for attempt in range(max_retries):
             try:
-                # remove null characters and leading/trailing whitespace
-                cleaned_content = message.content[0].text.replace('\x00', '').strip()
-                # find the first '{' and last '}' to extract the JSON object
-                start = cleaned_content.find('{')
-                end = cleaned_content.rfind('}') + 1
-                if start != -1 and end != -1:
-                    json_str = cleaned_content[start:end]
-                    analysis = json.loads(json_str)
-                    
-                    # Ensure all tickers from the config are present in the analysis
-                    for ticker in tickers:
-                        if ticker not in analysis['stocks']:
-                            logger.warning(f"Ticker {ticker} not found in Claude's analysis. Adding empty data.")
-                            analysis['stocks'][ticker] = {
-                                "sentiment_score": 0,
-                                "key_topics": [],
-                                "sentiment_change": {"time_period": "N/A", "change_percentage": 0},
-                                "financial_metrics": {}
-                            }
-                    
-                    return analysis
-                else:
-                    logger.error("No valid JSON object found in the response")
+                logger.info(f"Sending request to Claude API for ticker {ticker}...")
+                message = client.messages.create(
+                    model="claude-3-sonnet-20240229",
+                    max_tokens=4000,
+                    temperature=0,
+                    system=system_prompt,
+                    messages=[
+                        {"role": "user", "content": json.dumps(ticker_data)}
+                    ]
+                )
+                logger.info(f"Received response from Claude API for ticker {ticker}")
+                
+                # log the raw response content
+                logger.debug(f"Raw response content: {message.content}")
+                
+                # check if the content is empty
+                if not message.content:
+                    logger.error("Received empty content from Claude API")
                     return None
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Failed to parse JSON response: {str(json_err)}")
-                logger.debug(f"Response content causing JSON parse error: {cleaned_content}")
-                return None
-        except Exception as e:
-            if "rate_limit_error" in str(e):
-                delay = base_delay * (2 ** attempt) + random.uniform(0, 10)
-                logger.warning(f"Rate limit hit. Retrying in {delay:.2f} seconds...")
-                time.sleep(delay)
-            else:
-                logger.error(f"Error calling Claude API: {str(e)}")
-                raise
+                try:
+                    # remove null characters and leading/trailing whitespace
+                    cleaned_content = message.content[0].text.replace('\x00', '').strip()
+                    # find the first '{' and last '}' to extract the JSON object
+                    start = cleaned_content.find('{')
+                    end = cleaned_content.rfind('}') + 1
+                    if start != -1 and end != -1:
+                        json_str = cleaned_content[start:end]
+                        analysis = json.loads(json_str)
+                        
+                        # Ensure all tickers from the config are present in the analysis
+                        for ticker in tickers:
+                            if ticker not in analysis['stocks']:
+                                logger.warning(f"Ticker {ticker} not found in Claude's analysis. Adding empty data.")
+                                analysis['stocks'][ticker] = {
+                                    "sentiment_score": 0,
+                                    "key_topics": [],
+                                    "sentiment_change": {"time_period": "N/A", "change_percentage": 0},
+                                    "financial_metrics": {}
+                                }
+                        
+                        if analysis:
+                            all_analyses[ticker] = analysis['stocks'].get(ticker, {})
+                        
+                        # Add a longer delay to avoid hitting rate limits
+                        delay = base_delay + random.uniform(0, 30)  # Add some jitter
+                        logger.info(f"Waiting for {delay:.2f} seconds before next request...")
+                        time.sleep(delay)
+                        break  # Break the retry loop if successful
+                    else:
+                        logger.error("No valid JSON object found in the response")
+                        return None
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"Failed to parse JSON response: {str(json_err)}")
+                    logger.debug(f"Response content causing JSON parse error: {cleaned_content}")
+                    return None
+            except Exception as e:
+                if "rate_limit_error" in str(e) or "429" in str(e):
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 30)
+                    logger.warning(f"Rate limit hit for {ticker}. Retrying in {delay:.2f} seconds...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Error calling Claude API for {ticker}: {str(e)}")
+                    raise
+        else:
+            logger.error(f"Failed to process ticker {ticker} after {max_retries} attempts")
     
-    logger.error("Max retries reached. Unable to complete API call.")
-    raise Exception("Max retries reached for Claude API call")
+    if not all_analyses:
+        logger.error("No analyses were successfully completed.")
+        return None
+
+    # Combine all ticker analyses into the expected format
+    combined_analysis = {
+        "stocks": all_analyses,
+        "market_drivers": [],  # You may need to aggregate this from individual analyses
+        "stock_comparison": {}  # You may need to compute this based on all ticker data
+    }
+
+    return combined_analysis
 
 def get_latest_sentiment_date(db_path):
     conn = sqlite3.connect(db_path)
@@ -189,22 +213,28 @@ def main():
                 logger.info("Starting analysis with Claude")
                 analysis = analyze_with_claude(data)
 
-                processed_data_dir = os.path.join(project_root, 'data', 'raw', 'sentiment', 'claude')
-                os.makedirs(processed_data_dir, exist_ok=True)
-                output_file = f'claude_analysis_{today.strftime("%Y%m%d")}.json'
-                output_path = os.path.join(processed_data_dir, output_file)
-                
-                logger.info(f"Saving analysis to {output_path}")
-                with open(output_path, 'w') as f:
-                    json.dump(analysis, f, indent=2)
+                if analysis:
+                    processed_data_dir = os.path.join(project_root, 'data', 'raw', 'sentiment', 'claude')
+                    os.makedirs(processed_data_dir, exist_ok=True)
+                    output_file = f'claude_analysis_{today.strftime("%Y%m%d")}.json'
+                    output_path = os.path.join(processed_data_dir, output_file)
+                    
+                    logger.info(f"Saving analysis to {output_path}")
+                    with open(output_path, 'w') as f:
+                        json.dump(analysis, f, indent=2)
 
-                logger.info(f"Analysis completed and saved to {output_file}")
+                    logger.info(f"Analysis completed and saved to {output_file}")
+                else:
+                    logger.error("Analysis failed or returned no results.")
             else:
                 logger.info(f"Latest JSON file is not from today. Latest date: {latest_json_date}")
         else:
             logger.info(f"Sentiment data is up to date. Latest date in DB: {latest_db_date}")
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

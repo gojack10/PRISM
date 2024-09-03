@@ -4,3 +4,5 @@
 /config/config.yaml
 
 .DS_Store
+
+/src/models/testing/__pycache__
