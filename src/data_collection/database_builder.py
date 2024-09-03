@@ -51,7 +51,8 @@ def create_tables(conn: sqlite3.Connection):
     CREATE TABLE IF NOT EXISTS sentiment_stock_comparison (
         date TEXT PRIMARY KEY,
         sentiment_difference REAL,
-        topic_overlap_percentage REAL
+        topic_overlap_percentage REAL,
+        relationship_analysis TEXT
     )
     ''')
 
@@ -61,9 +62,12 @@ def create_tables(conn: sqlite3.Connection):
         date TEXT,
         ticker TEXT,
         sentiment_score REAL,
+        sentiment_confidence REAL,
         key_topics TEXT,
-        sentiment_change REAL,
+        sentiment_change TEXT,
         financial_metrics TEXT,
+        short_term_outlook TEXT,
+        long_term_outlook TEXT,
         PRIMARY KEY (date, ticker)
     )
     ''')
@@ -191,13 +195,37 @@ def insert_indicator_data(conn: sqlite3.Connection, ticker: str, indicator: str,
 def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
     cursor = conn.cursor()
     
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    
+    for ticker, stock_data in data['stocks'].items():
+        cursor.execute('''
+        INSERT OR REPLACE INTO sentiment_stock_sentiment
+        (date, ticker, sentiment_score, sentiment_confidence, key_topics, sentiment_change, 
+        financial_metrics, short_term_outlook, long_term_outlook)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (date_str, ticker, stock_data['sentiment_score'], 
+              stock_data['sentiment_confidence'],
+              json.dumps(stock_data['key_topics']),
+              json.dumps(stock_data['sentiment_change']),
+              json.dumps(stock_data['financial_metrics']),
+              json.dumps(stock_data['short_term_outlook']),
+              json.dumps(stock_data['long_term_outlook'])))
+    
+    # insert market drivers
+    for driver in data['market_drivers']:
+        cursor.execute('''
+        INSERT OR REPLACE INTO sentiment_market_drivers (date, driver, impact_score)
+        VALUES (?, ?, ?)
+        ''', (date_str, driver['driver'], driver['impact_score']))
+    
+    # insert stock comparison
     cursor.execute('''
-    INSERT OR REPLACE INTO sentiment_stock_sentiment
-    (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (data['date'], data['ticker'], data['sentiment_score'], 
-          json.dumps(data['key_topics']), data['sentiment_change'], 
-          json.dumps(data['financial_metrics'])))
+    INSERT OR REPLACE INTO sentiment_stock_comparison 
+    (date, sentiment_difference, topic_overlap_percentage, relationship_analysis)
+    VALUES (?, ?, ?, ?)
+    ''', (date_str, data['stock_comparison']['sentiment_difference'], 
+          data['stock_comparison']['topic_overlap_percentage'],
+          data['stock_comparison']['relationship_analysis']))
     
     conn.commit()
 
@@ -409,37 +437,8 @@ def update_sentiment_data(conn: sqlite3.Connection):
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                 
-                # extract date from filename and format it
-                date_str = file.split('_')[2].split('.')[0]  # extract date from filename
-                date = datetime.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d')
-                
-                # update market_drivers
-                for driver in data['market_drivers']:
-                    cursor.execute('''
-                    INSERT OR REPLACE INTO sentiment_market_drivers (date, driver, impact_score)
-                    VALUES (?, ?, ?)
-                    ''', (date, driver['driver'], driver['impact_score']))
-                
-                # update stock_comparison
-                cursor.execute('''
-                INSERT OR REPLACE INTO sentiment_stock_comparison 
-                (date, sentiment_difference, topic_overlap_percentage)
-                VALUES (?, ?, ?)
-                ''', (date, data['stock_comparison']['sentiment_difference'], 
-                      data['stock_comparison']['topic_overlap_percentage']))
-                
-                # update stock_sentiment
-                for ticker, stock_data in data['stocks'].items():
-                    cursor.execute('''
-                    INSERT OR REPLACE INTO sentiment_stock_sentiment
-                    (date, ticker, sentiment_score, key_topics, sentiment_change, financial_metrics)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (date, ticker, stock_data['sentiment_score'], 
-                          json.dumps(stock_data['key_topics']),
-                          stock_data['sentiment_change']['change_percentage'],
-                          json.dumps(stock_data['financial_metrics'])))
-                
-                logging.info(f"Processed sentiment data for date: {date}")
+                insert_sentiment_data(conn, data)
+                logging.info(f"Processed sentiment data from file: {file}")
             except Exception as e:
                 logging.error(f"Error processing sentiment file {file}: {str(e)}")
     
