@@ -3,3 +3,7 @@ python-dotenv
 PyYAML
 pandas
 anthropic
+xgboost
+scikit-learn
+matplotlib
+sqlalchemy
