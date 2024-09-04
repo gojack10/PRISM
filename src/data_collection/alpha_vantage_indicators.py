@@ -113,11 +113,18 @@ def check_and_fetch_historical_data():
     
     for ticker in STOCK_TICKERS:
         for indicator in INDICATORS:
-            output_dir = os.path.join(project_root, 'data', 'raw', 'indicators', 'historical', indicator)
-            os.makedirs(output_dir, exist_ok=True)
+            historical_dir = os.path.join(project_root, 'data', 'raw', 'indicators', 'historical', indicator)
+            os.makedirs(historical_dir, exist_ok=True)
+            
+            # Check if any historical data exists for this ticker and indicator
+            existing_files = [f for f in os.listdir(historical_dir) if f.startswith(f"{ticker}_{indicator}_")]
+            
+            if existing_files:
+                logging.info(f"Historical data already exists for {ticker} {indicator}. Skipping historical data collection.")
+                continue
             
             filename = f"{ticker}_{indicator}_{start_date}_{end_date}.json"
-            filepath = os.path.join(output_dir, filename)
+            filepath = os.path.join(historical_dir, filename)
             
             if not os.path.exists(filepath):
                 data = fetch_indicator_data(ticker, indicator, start_date, end_date)

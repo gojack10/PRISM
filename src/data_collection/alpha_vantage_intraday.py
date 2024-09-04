@@ -74,8 +74,21 @@ def save_to_csv(data: Dict[str, Any], symbol: str, date: str):
 
 def main():
     today = datetime.now().strftime('%Y-%m-%d')
+    past_data_dir = os.path.join(project_root, 'data', 'raw', 'intraday', 'past')
 
     for ticker in STOCK_TICKERS:
+        # Check if historical data exists
+        if os.path.exists(past_data_dir) and any(ticker in filename for filename in os.listdir(past_data_dir)):
+            logging.info(f"Historical data for {ticker} already exists. Skipping historical data collection.")
+        else:
+            logging.info(f"Fetching historical daily data for {ticker}")
+            historical_data = fetch_daily_data(ticker)
+            if historical_data:
+                save_to_csv(historical_data, ticker, 'historical')
+            else:
+                logging.warning(f"No historical data retrieved for {ticker}")
+
+        # Fetch and save today's data
         logging.info(f"Fetching daily data for {ticker} for {today}")
         data = fetch_daily_data(ticker)
         

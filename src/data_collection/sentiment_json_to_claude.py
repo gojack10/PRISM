@@ -9,6 +9,7 @@ import time
 import random
 from ratelimit import limits, sleep_and_retry
 import sqlite3
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
