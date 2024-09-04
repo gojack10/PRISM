@@ -5,7 +5,15 @@ from sklearn.model_selection import train_test_split
 
 def run_model():
     # Load data
-    X, y = load_data()
+    data, _ = load_data()
+    
+    if data is None:
+        print("Failed to load data. Exiting.")
+        return None
+
+    # Prepare features and target
+    y = data['close']
+    X = data.drop(columns=['close'])
 
     # Split data into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -23,3 +31,7 @@ def run_model():
 
 if __name__ == "__main__":
     best_model = run_model()
+    if best_model is not None:
+        print("Model training completed successfully.")
+    else:
+        print("Model training failed.")
