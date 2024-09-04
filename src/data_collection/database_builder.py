@@ -36,29 +36,9 @@ def get_indicator_table_name(ticker: str, indicator: str) -> str:
 def create_tables(conn: sqlite3.Connection):
     cursor = conn.cursor()
 
-    # create market_drivers table
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS sentiment_market_drivers (
-        date TEXT,
-        driver TEXT,
-        impact_score REAL,
-        PRIMARY KEY (date, driver)
-    )
-    ''')
-
-    # create stock_comparison table
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS sentiment_stock_comparison (
-        date TEXT PRIMARY KEY,
-        sentiment_difference REAL,
-        topic_overlap_percentage REAL,
-        relationship_analysis TEXT
-    )
-    ''')
-
     # create stock_sentiment table
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS sentiment_stock_sentiment (
+    CREATE TABLE IF NOT EXISTS stock_sentiment (
         date TEXT,
         ticker TEXT,
         sentiment_score REAL,
@@ -199,7 +179,7 @@ def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
     
     for ticker, stock_data in data['stocks'].items():
         cursor.execute('''
-        INSERT OR REPLACE INTO sentiment_stock_sentiment
+        INSERT OR REPLACE INTO stock_sentiment
         (date, ticker, sentiment_score, sentiment_confidence, key_topics, sentiment_change, 
         financial_metrics, short_term_outlook, long_term_outlook)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -210,22 +190,6 @@ def insert_sentiment_data(conn: sqlite3.Connection, data: Dict):
               json.dumps(stock_data['financial_metrics']),
               json.dumps(stock_data['short_term_outlook']),
               json.dumps(stock_data['long_term_outlook'])))
-    
-    # insert market drivers
-    for driver in data['market_drivers']:
-        cursor.execute('''
-        INSERT OR REPLACE INTO sentiment_market_drivers (date, driver, impact_score)
-        VALUES (?, ?, ?)
-        ''', (date_str, driver['driver'], driver['impact_score']))
-    
-    # insert stock comparison
-    cursor.execute('''
-    INSERT OR REPLACE INTO sentiment_stock_comparison 
-    (date, sentiment_difference, topic_overlap_percentage, relationship_analysis)
-    VALUES (?, ?, ?, ?)
-    ''', (date_str, data['stock_comparison']['sentiment_difference'], 
-          data['stock_comparison']['topic_overlap_percentage'],
-          data['stock_comparison']['relationship_analysis']))
     
     conn.commit()
 
@@ -482,6 +446,13 @@ def main():
     today = datetime.now().strftime('%Y-%m-%d')
     
     conn = connect_to_database()
+    
+    # Drop unused tables if they exist
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS sentiment_market_drivers")
+    cursor.execute("DROP TABLE IF EXISTS sentiment_stock_comparison")
+    conn.commit()
+    
     create_tables(conn)
     rename_existing_tables(conn)
     
