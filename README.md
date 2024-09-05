@@ -34,7 +34,13 @@ PRISM is a data-driven stock analysis and prediction system that combines tradit
 
 2. Configure the project:
    - Set up your Alpha Vantage API key in `config/.env`
-   - Adjust settings in `config/config.yaml` as needed
+   - Adjust settings in `config/config.yaml`:
+   ```
+   tickers:
+  - EX
+  - EX
+  - EX
+   ```
 
 3. Run the data update process:
    ```
