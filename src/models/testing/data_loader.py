@@ -40,30 +40,35 @@ def load_data():
         tickers = load_tickers()
         print(f"Tickers loaded: {tickers}")
         
-        # Query only the intraday table
-        query = f"SELECT * FROM intraday_{tickers[0]}"
+        # query data for all tickers
+        data_frames = []
+        for ticker in tickers:
+            query = f"SELECT * FROM intraday_{ticker}"
+            print(f"Executing query: {query}")
+            df = pd.read_sql(query, engine)
+            data_frames.append(df)
         
-        print(f"Executing query: {query}")
-        
-        data = pd.read_sql(query, engine)
+        data = pd.concat(data_frames, ignore_index=True)
 
         print("Query executed successfully")
         print("Columns in the DataFrame:")
         print(data.columns)
 
-        # Preprocess the data
+        # preprocess the data
         data['date'] = pd.to_datetime(data['date'])
-        data['date'] = data['date'].astype(int) / 10**9  # Convert to Unix timestamp
-        data = data.drop('ticker', axis=1)  # Drop the ticker column as it's constant
+        data['date'] = data['date'].astype(int) // 10**9  # convert to unix timestamp
 
-        # Ensure all columns are numeric
+        # ensure all columns are numeric
         for col in data.columns:
-            if data[col].dtype == 'object':
+            if col not in ['ticker', 'date'] and data[col].dtype == 'object':
                 try:
                     data[col] = pd.to_numeric(data[col])
                 except ValueError:
-                    print(f"Warning: Could not convert column '{col}' to numeric. Dropping this column.")
+                    print(f"warning: could not convert column '{col}' to numeric. dropping this column.")
                     data = data.drop(col, axis=1)
+
+        # set multi-index and sort
+        data = data.set_index(['ticker', 'date']).sort_index()
 
         print("\nProcessed DataFrame info:")
         print(data.info())
