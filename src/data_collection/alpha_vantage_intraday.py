@@ -45,7 +45,7 @@ def fetch_daily_data(symbol: str) -> Optional[Dict[str, Any]]:
     
     return None
 
-def save_to_csv(data: Dict[str, Any], symbol: str, date: str):
+def save_to_csv(data: Dict[str, Any], symbol: str, date: str) -> bool:
     output_dir = os.path.join(project_root, 'data', 'raw', 'intraday', 'daily_update')
     os.makedirs(output_dir, exist_ok=True)
     
@@ -69,8 +69,16 @@ def save_to_csv(data: Dict[str, Any], symbol: str, date: str):
                 today_data['5. volume']
             ])
             logging.info(f"Data for {symbol} on {date} saved to {filepath}")
+            return True
         else:
             logging.warning(f"No data available for {symbol} on {date}")
+            return False
+
+def check_csv_data(filepath: str) -> bool:
+    with open(filepath, 'r') as f:
+        csv_reader = csv.reader(f)
+        next(csv_reader)  # Skip header
+        return any(csv_reader)  # Return True if there's at least one data row
 
 def main():
     today = datetime.now().strftime('%Y-%m-%d')
@@ -89,13 +97,27 @@ def main():
                 logging.warning(f"No historical data retrieved for {ticker}")
 
         # Fetch and save today's data
-        logging.info(f"Fetching daily data for {ticker} for {today}")
-        data = fetch_daily_data(ticker)
+        retries = 0
+        while retries < 3:
+            logging.info(f"Fetching daily data for {ticker} for {today} (Attempt {retries + 1})")
+            data = fetch_daily_data(ticker)
+            
+            if data:
+                csv_file = os.path.join(project_root, 'data', 'raw', 'intraday', 'daily_update', f"{ticker}_daily_{today}.csv")
+                if save_to_csv(data, ticker, today) and check_csv_data(csv_file):
+                    break
+                else:
+                    logging.warning(f"No data saved for {ticker} on {today}. Retrying...")
+            else:
+                logging.warning(f"No data retrieved for {ticker} on {today}. Retrying...")
+            
+            retries += 1
+            if retries < 3:
+                time.sleep(5)
         
-        if data:
-            save_to_csv(data, ticker, today)
-        else:
-            logging.warning(f"No data retrieved for {ticker} on {today}")
+        if retries == 3:
+            logging.error(f"Failed to retrieve data for {ticker} after 3 attempts. Stopping script.")
+            return
 
 if __name__ == "__main__":
     main()
