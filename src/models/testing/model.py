@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import LabelEncoder
 
 def init_model(params=None):
     default_params = {
@@ -21,23 +22,33 @@ def init_model(params=None):
     return default_params
 
 def train_model(X, y, params=None):
-    # reset index to use ticker as a feature
-    X_reset = X.reset_index(level='ticker')
-    y_reset = y.reset_index(level='ticker')
-
-    # split data, ensuring that we don't mix dates between train and test
-    X_train, X_test, y_train, y_test = train_test_split(X_reset, y_reset, test_size=0.2, random_state=42)
-
-    # prepare data for xgboost
-    dtrain = xgb.DMatrix(X_train.drop(['ticker', 'date'], axis=1), label=y_train['close'])
-    dtest = xgb.DMatrix(X_test.drop(['ticker', 'date'], axis=1), label=y_test['close'])
+    print("\nInside train_model function:")
+    print("X columns:", X.columns)
+    print("y columns:", y.columns if isinstance(y, pd.DataFrame) else "y is a Series")
+    
+    # Create a copy of X to avoid modifying the original dataframe
+    X_prep = X.copy()
+    
+    # Convert 'ticker' to categorical codes
+    le = LabelEncoder()
+    X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
+    
+    # Ensure 'date' is in a numeric format (if it's not already)
+    if X_prep['date'].dtype == 'object':
+        X_prep['date'] = pd.to_datetime(X_prep['date']).astype(int) // 10**9  # convert to Unix timestamp
+    
+    print("\nPrepared X data types:")
+    print(X_prep.dtypes)
+    
+    # Prepare data for xgboost
+    dtrain = xgb.DMatrix(X_prep, label=y['close'])
 
     model_params = init_model(params)
-    watchlist = [(dtrain, "train"), (dtest, "test")]
+    
+    # Train the model
+    model = xgb.train(model_params, dtrain, num_boost_round=800, verbose_eval=True)
 
-    model = xgb.train(model_params, dtrain, num_boost_round=800, evals=watchlist, early_stopping_rounds=50, verbose_eval=True)
-
-    return model, X_test, y_test
+    return model, X_prep, y
 
 def plot_feature_importance(model, X):
     importance = model.get_score(importance_type='weight')

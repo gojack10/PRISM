@@ -1,14 +1,29 @@
+import pandas as pd
 from sklearn.metrics import mean_squared_error
 import xgboost as xgb
 import matplotlib.pyplot as plt
 from sklearn.model_selection import GridSearchCV
 from xgboost import XGBRegressor
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
+
+def preprocess_data(X):
+    X_prep = X.copy()
+    le = LabelEncoder()
+    X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
+    if X_prep['date'].dtype == 'object':
+        X_prep['date'] = pd.to_datetime(X_prep['date']).astype(int) // 10**9
+    return X_prep
 
 def evaluate_model(model, X_train, y_train, X_test, y_test):
+    # Preprocess test data
+    X_test_prep = preprocess_data(X_test)
+    X_train_prep = preprocess_data(X_train)
+
     # Predict and calculate RMSE
-    y_pred = model.predict(xgb.DMatrix(X_test))
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    dtest = xgb.DMatrix(X_test_prep)
+    y_pred = model.predict(dtest)
+    rmse = np.sqrt(mean_squared_error(y_test['close'], y_pred))
     print(f"Test RMSE: {rmse:.2f}")
 
     # Grid Search for hyperparameter tuning
@@ -22,7 +37,9 @@ def evaluate_model(model, X_train, y_train, X_test, y_test):
 
     xgb_model = XGBRegressor(objective="reg:squarederror", seed=42)
     grid_search = GridSearchCV(estimator=xgb_model, param_grid=param_grid, cv=3, scoring="neg_mean_squared_error", verbose=1)
-    grid_search.fit(X_train, y_train)
+    
+    # Use preprocessed data for grid search
+    grid_search.fit(X_train_prep, y_train['close'])
 
     print(f"Best parameters found: {grid_search.best_params_}")
     print(f"Best RMSE found: {(-grid_search.best_score_) ** 0.5:.2f}")
