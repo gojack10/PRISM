@@ -54,10 +54,10 @@ PRISM is a data-driven stock analysis and prediction system that combines tradit
 
 ## Current State and Limitations
 
-- The project successfully collects and processes various types of financial data.
+- Collects and processes various types of financial data.
 - An XGBoost model is implemented for stock price prediction, with basic feature importance analysis and hyperparameter tuning.
 - The system is set up to handle multiple stock tickers as defined in the configuration.
-- Sentiment analysis using the Claude AI model is integrated, providing an additional layer of analysis.
+- Sentiment analysis using the Claude AI API is integrated
 
 Please note:
 - The project is still in development and may require further refinement and testing.
