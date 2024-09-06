@@ -5,15 +5,28 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import GridSearchCV
 from xgboost import XGBRegressor
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 def preprocess_data(X):
     X_prep = X.copy()
     
-    # Handle 'ticker' column
+    # Handle 'ticker' column with one-hot encoding
     if 'ticker' in X_prep.columns:
-        le = LabelEncoder()
-        X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
+        # Create a one-hot encoder
+        onehot = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+        
+        # Fit and transform the 'ticker' column
+        ticker_encoded = onehot.fit_transform(X_prep[['ticker']])
+        
+        # Create DataFrame with encoded ticker columns
+        ticker_columns = pd.DataFrame(
+            ticker_encoded, 
+            columns=[f'ticker_{ticker}' for ticker in onehot.categories_[0]],
+            index=X_prep.index
+        )
+        
+        # Drop original 'ticker' column and join encoded columns
+        X_prep = X_prep.drop('ticker', axis=1).join(ticker_columns)
     
     # Ensure all columns are numeric
     for col in X_prep.columns:
@@ -23,6 +36,10 @@ def preprocess_data(X):
             except ValueError:
                 print(f"Warning: Could not convert column '{col}' to numeric. This column will be dropped.")
                 X_prep = X_prep.drop(columns=[col])
+    
+    print("Data types after preprocessing:")
+    print(X_prep.dtypes)
+    print(f"Number of features after preprocessing: {X_prep.shape[1]}")
     
     return X_prep
 

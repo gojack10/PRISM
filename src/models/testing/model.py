@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
 
 def init_model(params=None):
     default_params = {
@@ -35,8 +35,14 @@ def train_model(X, y, params=None):
     
     # Handle 'ticker' column if present
     if 'ticker' in X_prep.columns:
-        le = LabelEncoder()
-        X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
+        onehot = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+        ticker_encoded = onehot.fit_transform(X_prep[['ticker']])
+        ticker_columns = pd.DataFrame(
+            ticker_encoded, 
+            columns=[f'ticker_{ticker}' for ticker in onehot.categories_[0]],
+            index=X_prep.index
+        )
+        X_prep = X_prep.drop('ticker', axis=1).join(ticker_columns)
     
     # Ensure all columns are numeric
     for col in X_prep.columns:
@@ -49,6 +55,7 @@ def train_model(X, y, params=None):
 
     print("Data types after preprocessing:")
     print(X_prep.dtypes)
+    print(f"Number of features after preprocessing: {X_prep.shape[1]}")
 
     model = xgb.XGBRegressor(**params, early_stopping_rounds=15, eval_metric='rmse')
     
