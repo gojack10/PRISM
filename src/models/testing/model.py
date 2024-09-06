@@ -22,50 +22,61 @@ def init_model(params=None):
     return default_params
 
 def train_model(X, y, params=None):
-    print("\nInside train_model function:")
-    print("X columns:", X.columns)
-    print("y columns:", y.columns if isinstance(y, pd.DataFrame) else "y is a Series")
+    if params is None:
+        params = {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 300,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+        }
     
-    # Create a copy of X to avoid modifying the original dataframe
     X_prep = X.copy()
     
-    # Convert 'ticker' to categorical codes
-    le = LabelEncoder()
-    X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
+    # Handle 'ticker' column
+    if 'ticker' in X_prep.columns:
+        le = LabelEncoder()
+        X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
     
-    # Ensure 'date' is in a numeric format (if it's not already)
-    if X_prep['date'].dtype == 'object':
-        X_prep['date'] = pd.to_datetime(X_prep['date']).astype(int) // 10**9  # convert to Unix timestamp
-    
-    print("\nPrepared X data types:")
+    # Ensure all columns are numeric
+    for col in X_prep.columns:
+        if X_prep[col].dtype == 'object':
+            try:
+                X_prep[col] = pd.to_numeric(X_prep[col])
+            except ValueError:
+                print(f"Warning: Could not convert column '{col}' to numeric. This column will be dropped.")
+                X_prep = X_prep.drop(columns=[col])
+
+    print("Data types after preprocessing:")
     print(X_prep.dtypes)
-    
-    # Prepare data for xgboost
-    dtrain = xgb.DMatrix(X_prep, label=y['close'])
 
-    model_params = init_model(params)
-    
-    # Train the model
-    model = xgb.train(model_params, dtrain, num_boost_round=800, verbose_eval=True)
+    model = xgb.XGBRegressor(**params)
+    model.fit(X_prep, y)
 
-    return model, X_prep, y
+    # Get feature importances
+    importances = model.feature_importances_
+    feature_importance = pd.DataFrame({'feature': X_prep.columns, 'importance': importances})
+    feature_importance = feature_importance.sort_values('importance', ascending=False).reset_index(drop=True)
+
+    return model, feature_importance, params
 
 def plot_feature_importance(model, X):
-    importance = model.get_score(importance_type='weight')
-    importance_df = pd.DataFrame({'feature': list(importance.keys()), 'importance': list(importance.values())})
-    importance_df = importance_df.sort_values('importance', ascending=False)
+    # Get feature importances
+    importances = model.feature_importances_
+    feature_importance = pd.DataFrame({'feature': X.columns, 'importance': importances})
+    feature_importance = feature_importance.sort_values('importance', ascending=False).reset_index(drop=True)
 
+    # Plot feature importances
     plt.figure(figsize=(10, 6))
-    plt.bar(importance_df['feature'], importance_df['importance'])
-    plt.xticks(rotation=90)
+    plt.bar(feature_importance['feature'], feature_importance['importance'])
+    plt.title('Feature Importance')
     plt.xlabel('Features')
     plt.ylabel('Importance')
-    plt.title('Feature Importance')
+    plt.xticks(rotation=90)
     plt.tight_layout()
     plt.show()
 
-    print("\nFeature Importance:")
-    print(importance_df)
+    return feature_importance
 
 def evaluate_model_performance(model, X_test, y_test):
     # prepare data for xgboost
