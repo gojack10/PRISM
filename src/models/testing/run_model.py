@@ -25,8 +25,8 @@ def run_model():
     X = X.sort_values('date')
     y = y.loc[X.index]
 
-    # Initialize TimeSeriesSplit
-    tscv = TimeSeriesSplit(n_splits=5)
+    # Initialize TimeSeriesSplit with more splits
+    tscv = TimeSeriesSplit(n_splits=4)
 
     # Initialize lists to store performance metrics
     rmse_scores = []
@@ -34,7 +34,9 @@ def run_model():
     r2_scores = []
 
     # Perform time series cross-validation
-    for train_index, test_index in tscv.split(X):
+    for fold, (train_index, test_index) in enumerate(tscv.split(X), 1):
+        print(f"\nProcessing fold {fold}/{tscv.n_splits}")
+        
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
         y_train, y_test = y.iloc[train_index], y.iloc[test_index]
 
@@ -43,15 +45,19 @@ def run_model():
         X_test_prep = preprocess_data(X_test)
 
         # Train initial model
+        print("Training initial model...")
         initial_model, _, _ = train_model(X_train_prep, y_train)
 
         # Evaluate and get best parameters
+        print("Evaluating model and finding best parameters...")
         best_params = evaluate_model(initial_model, X_train_prep, y_train, X_test_prep, y_test)
 
         # Train model with best parameters
+        print("Training model with best parameters...")
         model, _, _ = train_model(X_train_prep, y_train, params=best_params)
 
         # Make predictions
+        print("Making predictions...")
         y_pred = model.predict(X_test_prep)
 
         # Calculate performance metrics
@@ -62,6 +68,11 @@ def run_model():
         rmse_scores.append(rmse)
         mae_scores.append(mae)
         r2_scores.append(r2)
+
+        print(f"Fold {fold} metrics:")
+        print(f"RMSE: {rmse:.4f}")
+        print(f"MAE: {mae:.4f}")
+        print(f"R2: {r2:.4f}")
 
     # Print average performance metrics
     print("\nAverage Performance Metrics:")

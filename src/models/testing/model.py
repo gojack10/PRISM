@@ -25,15 +25,15 @@ def train_model(X, y, params=None):
     if params is None:
         params = {
             'max_depth': 6,
-            'learning_rate': 0.1,
+            'learning_rate': 0.05,
             'n_estimators': 300,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
+            'subsample': 0.9,
+            'colsample_bytree': 0.9,
         }
     
     X_prep = X.copy()
     
-    # Handle 'ticker' column
+    # Handle 'ticker' column if present
     if 'ticker' in X_prep.columns:
         le = LabelEncoder()
         X_prep['ticker'] = le.fit_transform(X_prep['ticker'])
@@ -50,8 +50,14 @@ def train_model(X, y, params=None):
     print("Data types after preprocessing:")
     print(X_prep.dtypes)
 
-    model = xgb.XGBRegressor(**params)
-    model.fit(X_prep, y)
+    model = xgb.XGBRegressor(**params, early_stopping_rounds=15, eval_metric='rmse')
+    
+    # Split data for early stopping
+    split_point = int(0.8 * len(X_prep))
+    X_train, X_val = X_prep[:split_point], X_prep[split_point:]
+    y_train, y_val = y[:split_point], y[split_point:]
+    
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 
     # Get feature importances
     importances = model.feature_importances_
@@ -67,7 +73,7 @@ def plot_feature_importance(model, X):
     feature_importance = feature_importance.sort_values('importance', ascending=False).reset_index(drop=True)
 
     # Plot feature importances
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 8))
     plt.bar(feature_importance['feature'], feature_importance['importance'])
     plt.title('Feature Importance')
     plt.xlabel('Features')
