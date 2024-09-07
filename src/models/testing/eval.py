@@ -1,11 +1,12 @@
 import pandas as pd
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import make_scorer, mean_squared_error
 import xgboost as xgb
 import matplotlib.pyplot as plt
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, ParameterGrid, KFold, train_test_split
 from xgboost import XGBRegressor
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from tqdm import tqdm  # Import tqdm for progress bar
 
 def preprocess_data(X):
     X_prep = X.copy()
@@ -56,33 +57,66 @@ def evaluate_model(model, X_train, y_train, X_test, y_test):
     X_train_prep = preprocess_data(X_train)
     X_test_prep = preprocess_data(X_test)
 
-    grid_search = GridSearchCV(
-        estimator=xgb.XGBRegressor(
-            eval_metric='rmse',
-            early_stopping_rounds=10
-        ),
-        param_grid=param_grid,
-        cv=4,  # Increased number of cross-validation folds
-        n_jobs=-1,
-        verbose=2,
-        scoring='neg_mean_squared_error'
+    # Calculate total number of fits
+    n_candidates = np.prod([len(v) for v in param_grid.values()])
+    n_splits = 4
+    total_fits = n_candidates * n_splits
+
+    print(f"Total number of fits: {total_fits}")
+
+    best_score = float('-inf')
+    best_params = None
+
+    # Fit the model with a manual progress bar
+    with tqdm(total=total_fits, desc="Grid Search Progress") as pbar:
+        for params in ParameterGrid(param_grid):
+            cv_scores = []
+            for train, val in KFold(n_splits=4, shuffle=False).split(X_train_prep):
+                estimator = xgb.XGBRegressor(
+                    eval_metric='rmse',
+                    early_stopping_rounds=10,
+                    verbosity=0,
+                    **params
+                )
+                estimator.fit(
+                    X_train_prep.iloc[train], y_train.iloc[train],
+                    eval_set=[(X_train_prep.iloc[val], y_train.iloc[val])],
+                    verbose=False
+                )
+                y_pred = estimator.predict(X_train_prep.iloc[val])
+                score = -mean_squared_error(y_train.iloc[val], y_pred)
+                cv_scores.append(score)
+                pbar.update(1)
+            
+            mean_score = np.mean(cv_scores)
+            if mean_score > best_score:
+                best_score = mean_score
+                best_params = params
+
+    print(f"Best parameters: {best_params}")
+
+    # Split the training data to create a validation set
+    X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
+        X_train_prep, y_train, test_size=0.2, random_state=42
     )
 
-    grid_search.fit(
-        X_train_prep, 
-        y_train, 
-        eval_set=[(X_test_prep, y_test)],
+    # Train the best model
+    best_model = xgb.XGBRegressor(
+        eval_metric='rmse',
+        early_stopping_rounds=10,
+        verbosity=0,
+        **best_params
+    )
+    best_model.fit(
+        X_train_final, y_train_final,
+        eval_set=[(X_val_final, y_val_final)],
         verbose=False
     )
-
-    best_params = grid_search.best_params_
-    best_model = grid_search.best_estimator_
 
     y_pred = best_model.predict(X_test_prep)
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
 
-    print(f"Best parameters: {best_params}")
     print(f"RMSE: {rmse}")
 
     return best_params
