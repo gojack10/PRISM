@@ -2,7 +2,7 @@ from data_loader import load_data
 from model import train_model, plot_feature_importance
 from eval import evaluate_model, preprocess_data
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -75,11 +75,20 @@ def run_model():
         print(f"MAE: {mae:.4f}")
         print(f"R2: {r2:.4f}")
 
-    # Print average performance metrics
-    print("\nAverage Performance Metrics:")
-    print(f"RMSE: {np.mean(rmse_scores):.4f} (+/- {np.std(rmse_scores):.4f})")
-    print(f"MAE: {np.mean(mae_scores):.4f} (+/- {np.std(mae_scores):.4f})")
-    print(f"R2: {np.mean(r2_scores):.4f} (+/- {np.std(r2_scores):.4f})")
+        # Calculate additional metrics
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        r2 = r2_score(y_test, y_pred)
+        mape = mean_absolute_percentage_error(y_test, y_pred)
+
+        # Calculate directional accuracy
+        direction_true = np.sign(y_test.values[1:] - y_test.values[:-1])
+        direction_pred = np.sign(y_pred[1:] - y_pred[:-1])
+        directional_accuracy = np.mean(direction_true == direction_pred)
+
+        print(f"Root Mean Squared Error (RMSE): {rmse:.4f}")
+        print(f"R-squared (R²) Score: {r2:.4f}")
+        print(f"Mean Absolute Percentage Error (MAPE): {mape:.4f}")
+        print(f"Directional Accuracy: {directional_accuracy:.4f}")
 
     # Train final model on all data
     X_prep = preprocess_data(X)
