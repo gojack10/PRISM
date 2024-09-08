@@ -6,76 +6,7 @@ from sklearn.model_selection import GridSearchCV, ParameterGrid, KFold, train_te
 from xgboost import XGBRegressor
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-from tqdm import tqdm  # Import tqdm for progress bar
-
-def preprocess_data(X):
-    X_prep = X.copy()
-    
-    # Check if 'ticker' column exists
-    if 'ticker' not in X_prep.columns:
-        print("Warning: 'ticker' column not found in the input data. Skipping ticker-based operations.")
-    else:
-        # Handle 'ticker' column with one-hot encoding
-        onehot = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        ticker_encoded = onehot.fit_transform(X_prep[['ticker']])
-        ticker_columns = pd.DataFrame(
-            ticker_encoded, 
-            columns=[f'ticker_{ticker}' for ticker in onehot.categories_[0]],
-            index=X_prep.index
-        )
-        X_prep = X_prep.drop('ticker', axis=1).join(ticker_columns)
-    
-    # Create lagged features if 'close' column exists
-    if 'close' in X_prep.columns:
-        X_prep['close_lag_1'] = X_prep['close'].shift(1)
-        X_prep['close_lag_7'] = X_prep['close'].shift(7)
-        X_prep['close_rolling_7'] = X_prep['close'].rolling(window=7).mean()
-        X_prep['close_rolling_30'] = X_prep['close'].rolling(window=30).mean()
-    else:
-        print("Warning: 'close' column not found. Skipping close price-based features.")
-    
-    # Create volume-based features if 'volume' column exists
-    if 'volume' in X_prep.columns:
-        X_prep['volume_lag_1'] = X_prep['volume'].shift(1)
-        X_prep['volume_lag_7'] = X_prep['volume'].shift(7)
-        X_prep['volume_rolling_7'] = X_prep['volume'].rolling(window=7).mean()
-        X_prep['volume_rolling_30'] = X_prep['volume'].rolling(window=30).mean()
-    else:
-        print("Warning: 'volume' column not found. Skipping volume-based features.")
-    
-    # Add time-based features
-    if 'date' in X_prep.columns:
-        X_prep['day_of_week'] = pd.to_datetime(X_prep['date'], unit='s').dt.dayofweek
-        X_prep['month'] = pd.to_datetime(X_prep['date'], unit='s').dt.month
-        
-        # Apply cyclical encoding
-        X_prep['day_of_week_sin'] = np.sin(X_prep['day_of_week'] * (2 * np.pi / 7))
-        X_prep['day_of_week_cos'] = np.cos(X_prep['day_of_week'] * (2 * np.pi / 7))
-        X_prep['month_sin'] = np.sin((X_prep['month'] - 1) * (2 * np.pi / 12))
-        X_prep['month_cos'] = np.cos((X_prep['month'] - 1) * (2 * np.pi / 12))
-        
-        # Drop original day_of_week and month columns
-        X_prep = X_prep.drop(['day_of_week', 'month'], axis=1)
-    else:
-        print("Warning: 'date' column not found. Skipping time-based features.")
-    
-    # Ensure all columns are numeric
-    for col in X_prep.columns:
-        if X_prep[col].dtype == 'object':
-            try:
-                X_prep[col] = pd.to_numeric(X_prep[col])
-            except ValueError:
-                print(f"Warning: Could not convert column '{col}' to numeric. This column will be dropped.")
-                X_prep = X_prep.drop(columns=[col])
-    
-    # Handle missing data
-    X_prep = X_prep.dropna()
-    
-    print("Data types after preprocessing:")
-    print(X_prep.dtypes)
-    print(f"Number of features after preprocessing: {X_prep.shape[1]}")
-    
-    return X_prep
+from tqdm import tqdm
 
 def evaluate_model(model, X_train, y_train, X_test, y_test):
     param_grid = {
