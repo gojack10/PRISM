@@ -12,6 +12,7 @@ from sklearn.feature_selection import RFE
 from xgboost import XGBRegressor
 import matplotlib.pyplot as plt
 import os
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ def select_features_rfe(X, y, num_features):
     selected_features = X.columns[rfe.support_].tolist()
     
     return selected_features
+
+def get_run_folder():
+    return f"run {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
 def run_model():
     try:
@@ -118,13 +122,20 @@ def run_model():
         logger.info("\nResults with RFE selected features:")
         log_results(results_rfe)
 
-        # Visualize feature importances
+        # Create a new folder for this run
+        run_folder = get_run_folder()
         current_dir = os.path.dirname(os.path.abspath(__file__))
         prism_dir = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-        output_dir = os.path.join(prism_dir, 'graph-output')
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        output_dir = os.path.join(prism_dir, 'graph-output', run_folder)
+        
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Created new output directory: {output_dir}")
+        except OSError as e:
+            logger.error(f"Error creating output directory: {e}")
+            raise
 
+        # Visualize feature importances
         avg_feature_importance = pd.concat(results_all['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
         visualize_feature_importance(avg_feature_importance, "Feature Importance - All Features", output_dir)
         

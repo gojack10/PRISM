@@ -6,3 +6,5 @@
 .DS_Store
 
 /src/models/testing/__pycache__
+
+/graph-output/
