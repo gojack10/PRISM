@@ -7,6 +7,10 @@ from xgboost import XGBRegressor
 import numpy as np
 from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from tqdm import tqdm
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 def evaluate_model(model, X_train, y_train, X_test, y_test):
     param_grid = {
@@ -84,3 +88,25 @@ def evaluate_model(model, X_train, y_train, X_test, y_test):
     print(f"RMSE: {rmse}")
 
     return best_params
+
+def visualize_feature_importance(feature_importances, title, output_dir=None):
+    if not isinstance(feature_importances, pd.Series):
+        raise ValueError("feature_importances must be a pandas Series")
+    
+    plt.figure(figsize=(10, 6))
+    feature_importances.plot(kind='bar')
+    plt.title(title)
+    plt.xlabel('Features')
+    plt.ylabel('Importance')
+    plt.tight_layout()
+    
+    if output_dir:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        filename = os.path.join(output_dir, f"{title.replace(' ', '_')}.png")
+        plt.savefig(filename)
+        logger.info(f"Feature importance plot saved to: {filename}")
+        plt.close()
+    else:
+        plt.show()
+        plt.close()

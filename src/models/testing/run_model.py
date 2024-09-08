@@ -1,6 +1,6 @@
 from data_loader import load_data
 from model import train_model, plot_feature_importance
-from eval import evaluate_model
+from eval import evaluate_model, visualize_feature_importance
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 import numpy as np
@@ -8,9 +8,35 @@ import pandas as pd
 from tqdm import tqdm
 from feature_engineering import engineer_features
 import logging
+from sklearn.feature_selection import RFE
+from xgboost import XGBRegressor
+import matplotlib.pyplot as plt
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def select_features_xgboost(X, y, num_features):
+    model = XGBRegressor()
+    model.fit(X, y)
+    
+    # Get feature importances
+    importances = model.feature_importances_
+    feature_importances = pd.Series(importances, index=X.columns).sort_values(ascending=False)
+    
+    # Select top features
+    selected_features = feature_importances.head(num_features).index.tolist()
+    
+    return selected_features
+
+def select_features_rfe(X, y, num_features):
+    model = XGBRegressor()
+    rfe = RFE(estimator=model, n_features_to_select=num_features, step=1)
+    rfe = rfe.fit(X, y)
+    
+    selected_features = X.columns[rfe.support_].tolist()
+    
+    return selected_features
 
 def run_model():
     try:
@@ -68,43 +94,48 @@ def run_model():
         # Initialize TimeSeriesSplit
         tscv = TimeSeriesSplit(n_splits=5)
         
-        # Initialize lists to store results
-        train_scores = []
-        test_scores = []
-        feature_importances = []
+        # Feature selection
+        num_features = X_engineered.shape[1] // 2  # Select half of the features
+        selected_features_xgb = select_features_xgboost(X_engineered, y, num_features)
+        selected_features_rfe = select_features_rfe(X_engineered, y, num_features)
+
+        # Train and evaluate model with all features
+        results_all = train_and_evaluate(X_engineered, y, tscv)
+
+        # Train and evaluate model with XGBoost selected features
+        results_xgb = train_and_evaluate(X_engineered[selected_features_xgb], y, tscv)
+
+        # Train and evaluate model with RFE selected features
+        results_rfe = train_and_evaluate(X_engineered[selected_features_rfe], y, tscv)
+
+        # Compare results
+        logger.info("\nResults with all features:")
+        log_results(results_all)
+
+        logger.info("\nResults with XGBoost selected features:")
+        log_results(results_xgb)
+
+        logger.info("\nResults with RFE selected features:")
+        log_results(results_rfe)
+
+        # Visualize feature importances
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        prism_dir = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
+        output_dir = os.path.join(prism_dir, 'graph-output')
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        avg_feature_importance = pd.concat(results_all['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
+        visualize_feature_importance(avg_feature_importance, "Feature Importance - All Features", output_dir)
         
-        # Perform cross-validation
-        for train_index, test_index in tqdm(tscv.split(X_engineered), desc="Cross-validation", total=5):
-            X_train, X_test = X_engineered.iloc[train_index], X_engineered.iloc[test_index]
-            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-            
-            # Train model
-            model_tuple = train_model(X_train, y_train)
-            model = model_tuple[0]  # Assuming the model is the first element of the tuple
-            
-            # Make predictions
-            y_train_pred = model.predict(X_train)
-            y_test_pred = model.predict(X_test)
-            
-            # Calculate scores
-            train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
-            test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
-            
-            train_scores.append(train_rmse)
-            test_scores.append(test_rmse)
-            
-            # Get feature importance
-            importance = model.feature_importances_
-            feature_importances.append(pd.Series(importance, index=X_train.columns))
+        xgb_importance = pd.Series(dict(zip(selected_features_xgb, avg_feature_importance[selected_features_xgb])))
+        visualize_feature_importance(xgb_importance, "Feature Importance - XGBoost Selected", output_dir)
         
-        # Print average scores
-        logger.info(f"Average Train RMSE: {np.mean(train_scores):.4f} (+/- {np.std(train_scores):.4f})")
-        logger.info(f"Average Test RMSE: {np.mean(test_scores):.4f} (+/- {np.std(test_scores):.4f})")
-        
-        # Plot average feature importance
-        avg_feature_importance = pd.concat(feature_importances, axis=1).mean(axis=1).sort_values(ascending=False)
-        plot_feature_importance(avg_feature_importance.values, avg_feature_importance.index)
-        
+        rfe_importance = pd.Series(dict(zip(selected_features_rfe, avg_feature_importance[selected_features_rfe])))
+        visualize_feature_importance(rfe_importance, "Feature Importance - RFE Selected", output_dir)
+
+        logger.info(f"Feature importance plots have been saved to the '{output_dir}' directory.")
+
         # Train final model on all data
         final_model_tuple = train_model(X_engineered, y)
         final_model = final_model_tuple[0]  # Assuming the model is the first element of the tuple
@@ -128,6 +159,44 @@ def run_model():
     except Exception as e:
         logger.error(f"An error occurred during model execution: {str(e)}")
         raise
+
+def train_and_evaluate(X, y, tscv):
+    train_scores = []
+    test_scores = []
+    feature_importances = []
+
+    for train_index, test_index in tqdm(tscv.split(X), desc="Cross-validation", total=5):
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+
+        model_tuple = train_model(X_train, y_train)
+        model = model_tuple[0]
+
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
+
+        train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+        test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+
+        train_scores.append(train_rmse)
+        test_scores.append(test_rmse)
+
+        importance = model.feature_importances_
+        feature_importances.append(pd.Series(importance, index=X_train.columns))
+
+    return {
+        'train_scores': train_scores,
+        'test_scores': test_scores,
+        'feature_importances': feature_importances
+    }
+
+def log_results(results):
+    logger.info(f"Average Train RMSE: {np.mean(results['train_scores']):.4f} (+/- {np.std(results['train_scores']):.4f})")
+    logger.info(f"Average Test RMSE: {np.mean(results['test_scores']):.4f} (+/- {np.std(results['test_scores']):.4f})")
+
+    avg_feature_importance = pd.concat(results['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
+    logger.info("\nTop 10 features:")
+    logger.info(avg_feature_importance.head(10))
 
 if __name__ == "__main__":
     run_model()
