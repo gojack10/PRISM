@@ -73,23 +73,28 @@ def train_model(X, y, params=None):
 
     return model, feature_importance, params
 
-def plot_feature_importance(model, X):
-    # Get feature importances
-    importances = model.feature_importances_
-    feature_importance = pd.DataFrame({'feature': X.columns, 'importance': importances})
-    feature_importance = feature_importance.sort_values('importance', ascending=False).reset_index(drop=True)
+def plot_feature_importance(importances, feature_names):
+    # Sort feature importances in descending order
+    indices = np.argsort(importances)[::-1]
 
-    # Plot feature importances
-    plt.figure(figsize=(12, 8))
-    plt.bar(feature_importance['feature'], feature_importance['importance'])
-    plt.title('Feature Importance')
-    plt.xlabel('Features')
-    plt.ylabel('Importance')
-    plt.xticks(rotation=90)
+    # Rearrange feature names so they match the sorted feature importances
+    names = [feature_names[i] for i in indices]
+
+    # Create plot
+    plt.figure(figsize=(20,10))
+
+    # Create plot title
+    plt.title("Feature Importance")
+
+    # Add bars
+    plt.bar(range(len(importances)), importances[indices])
+
+    # Add feature names as x-axis labels
+    plt.xticks(range(len(importances)), names, rotation=90)
+
+    # Show plot
     plt.tight_layout()
     plt.show()
-
-    return feature_importance
 
 def evaluate_model_performance(model, X_test, y_test):
     # prepare data for xgboost
