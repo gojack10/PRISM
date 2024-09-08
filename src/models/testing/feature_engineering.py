@@ -45,13 +45,13 @@ def engineer_features(df):
     logger.info(df.columns)
 
     # Create lagged features
-    df = create_lagged_features(df, ['volume'], [1, 7])  # Removed 'close' as it's not in the input
+    df = create_lagged_features(df, ['volume', 'close'], [1, 7])  # added 'close'
     
-    # Calculate returns (skip this step as 'close' is not in the input)
-    # df = calculate_returns(df)
+    # Calculate returns
+    df = calculate_returns(df, 'close')
     
     # Create rolling features
-    df = create_rolling_features(df, ['volume'], [7, 30])  # Removed 'close' as it's not in the input
+    df = create_rolling_features(df, ['volume', 'close'], [7, 30])  # added 'close'
     
     # Add time-based features
     if 'date' in df.columns:
@@ -83,11 +83,11 @@ def engineer_features(df):
                 feature_names = encoder.get_feature_names(['ticker'])
             
             ticker_columns = pd.DataFrame(ticker_encoded, columns=feature_names, index=df.index)
-            df = pd.concat([df.drop('ticker', axis=1), ticker_columns], axis=1)
+            df = pd.concat([df, ticker_columns], axis=1).drop('ticker', axis=1)
         except Exception as e:
             logger.error(f"Error during one-hot encoding: {str(e)}")
-            # If one-hot encoding fails, we'll just drop the 'ticker' column
-            df = df.drop('ticker', axis=1)
+            # if one-hot encoding fails, log the error but retain the 'ticker' column
+            logger.warning("One-hot encoding failed. Retaining the 'ticker' column.")
     else:
         logger.warning("'ticker' column not found. Skipping one-hot encoding for tickers.")
     
