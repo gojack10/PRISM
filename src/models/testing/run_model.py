@@ -160,22 +160,24 @@ def run_model():
 
         # Train final model on all data
         final_model_tuple = train_model(X_engineered, y)
-        final_model = final_model_tuple[0]  # Assuming the model is the first element of the tuple
+        final_model = final_model_tuple[0]  # assuming the model is the first element of the tuple
         
-        # Evaluate final model
+        # evaluate final model
         final_predictions = final_model.predict(X_engineered)
         final_rmse = np.sqrt(mean_squared_error(y, final_predictions))
         final_mae = mean_absolute_error(y, final_predictions)
         final_r2 = r2_score(y, final_predictions)
         final_mape = mean_absolute_percentage_error(y, final_predictions)
+        final_da = calculate_directional_accuracy(y.values, final_predictions)  # Convert y to numpy array
         
         logger.info("\nFinal Model Performance:")
         logger.info(f"RMSE: {final_rmse:.4f}")
         logger.info(f"MAE: {final_mae:.4f}")
-        logger.info(f"R2 Score: {final_r2:.4f}")
+        logger.info(f"R²: {final_r2:.4f}")
         logger.info(f"MAPE: {final_mape:.4f}")
+        logger.info(f"Directional Accuracy: {final_da:.4f}")
         
-        # Plot final feature importance
+        # plot final feature importance
         plot_feature_importance(final_model.feature_importances_, X_engineered.columns)
 
     except Exception as e:
@@ -219,6 +221,17 @@ def log_results(results):
     avg_feature_importance = pd.concat(results['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
     logger.info("\nTop 10 features:")
     logger.info(avg_feature_importance.head(10))
+
+def calculate_directional_accuracy(y_true, y_pred):
+    # calculate the direction of change
+    y_true_direction = np.sign(np.diff(y_true))
+    y_pred_direction = np.sign(np.diff(y_pred))
+    
+    # compare directions and calculate accuracy
+    correct_directions = np.sum(y_true_direction == y_pred_direction)
+    total_predictions = len(y_true_direction)
+    
+    return correct_directions / total_predictions
 
 if __name__ == "__main__":
     run_model()
