@@ -82,11 +82,22 @@ def run_model():
         logger.info("\nFirst few rows of X_engineered:")
         logger.info(X_engineered.head())
         
+        # Log sentiment-related features
+        sentiment_features = [col for col in X_engineered.columns if 'sentiment' in col]
+        logger.info("\nSentiment-related features:")
+        logger.info(sentiment_features)
+        
         # Ensure all columns are numeric
         non_numeric_columns = X_engineered.select_dtypes(exclude=[np.number]).columns
         if len(non_numeric_columns) > 0:
             logger.warning(f"Dropping non-numeric columns: {non_numeric_columns}")
             X_engineered = X_engineered.select_dtypes(include=[np.number])
+        
+        # Check if sentiment features were accidentally dropped
+        remaining_sentiment_features = [col for col in X_engineered.columns if 'sentiment' in col]
+        if len(remaining_sentiment_features) < len(sentiment_features):
+            logger.warning("Some sentiment features were dropped during non-numeric column removal.")
+            logger.warning(f"Dropped sentiment features: {set(sentiment_features) - set(remaining_sentiment_features)}")
         
         logger.info("\nFinal data types:")
         logger.info(X_engineered.dtypes)

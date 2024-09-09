@@ -45,18 +45,21 @@ def engineer_features(df):
     logger.info(df.columns)
 
     # Create lagged features
-    df = create_lagged_features(df, ['volume', 'close'], [1, 7])  # added 'close'
+    df = create_lagged_features(df, ['volume', 'close', 'sentiment_score', 'sentiment_confidence'], [1, 7])
     
     # Calculate returns
     df = calculate_returns(df, 'close')
     
     # Create rolling features
-    df = create_rolling_features(df, ['volume', 'close'], [7, 30])  # added 'close'
+    df = create_rolling_features(df, ['volume', 'close', 'sentiment_score', 'sentiment_confidence'], [7, 30])
     
     # Add time-based features
     if 'date' in df.columns:
-        df['day_of_week'] = pd.to_datetime(df['date'], unit='s').dt.dayofweek
-        df['month'] = pd.to_datetime(df['date'], unit='s').dt.month
+        df['date'] = pd.to_datetime(df['date'])
+        df['day_of_week'] = df['date'].dt.dayofweek
+        df['month'] = df['date'].dt.month
+        df['year'] = df['date'].dt.year
+        df['is_weekend'] = df['date'].dt.dayofweek.isin([5, 6]).astype(int)
         
         # Apply cyclical encoding to time-based features
         df['day_of_week_sin'] = np.sin(df['day_of_week'] * (2 * np.pi / 7))
@@ -68,6 +71,15 @@ def engineer_features(df):
         df = df.drop(['day_of_week', 'month', 'date'], axis=1)
     else:
         logger.warning("'date' column not found. Skipping time-based features.")
+    
+    # Create confidence-weighted sentiment score
+    df['weighted_sentiment'] = df['sentiment_score'] * df['sentiment_confidence']
+    
+    # Create rolling averages for sentiment features
+    for window in [3, 7, 14, 30]:
+        df[f'sentiment_score_rolling_{window}'] = df.groupby('ticker')['sentiment_score'].rolling(window=window).mean().reset_index(0, drop=True)
+        df[f'sentiment_confidence_rolling_{window}'] = df.groupby('ticker')['sentiment_confidence'].rolling(window=window).mean().reset_index(0, drop=True)
+        df[f'weighted_sentiment_rolling_{window}'] = df.groupby('ticker')['weighted_sentiment'].rolling(window=window).mean().reset_index(0, drop=True)
     
     # One-hot encode the 'ticker' column
     if 'ticker' in df.columns:
@@ -90,7 +102,7 @@ def engineer_features(df):
             logger.warning("One-hot encoding failed. Retaining the 'ticker' column.")
     else:
         logger.warning("'ticker' column not found. Skipping one-hot encoding for tickers.")
-    
+
     # Normalize numerical features
     numerical_columns = df.select_dtypes(include=[np.number]).columns
     df = normalize_features(df, numerical_columns)
