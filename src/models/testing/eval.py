@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def evaluate_model(model, X_train, y_train, X_test, y_test):
+def evaluate_model(model, X_train, y_train, X_test, y_test, ticker=None):
     param_grid = {
         'max_depth': [3, 5, 7],
         'learning_rate': [0.01, 0.05, 0.1],
@@ -85,7 +85,7 @@ def evaluate_model(model, X_train, y_train, X_test, y_test):
     mse = mean_squared_error(y_test, y_pred)
     rmse = np.sqrt(mse)
 
-    print(f"RMSE: {rmse}")
+    print(f"RMSE for {'consolidated model' if ticker is None else ticker}: {rmse}")
 
     return best_params
 
@@ -110,3 +110,20 @@ def visualize_feature_importance(feature_importances, title, output_dir=None):
     else:
         plt.show()
         plt.close()
+
+# Add a new function for evaluating the consolidated model
+def evaluate_consolidated_model(model, X, y):
+    predictions = model.predict(X)
+    mse = mean_squared_error(y, predictions)
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y, predictions)
+    r2 = r2_score(y, predictions)
+    mape = mean_absolute_percentage_error(y, predictions)
+
+    print("Consolidated Model Performance:")
+    print(f"RMSE: {rmse}")
+    print(f"MAE: {mae}")
+    print(f"R²: {r2}")
+    print(f"MAPE: {mape}")
+
+    return rmse, mae, r2, mape

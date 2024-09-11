@@ -40,9 +40,12 @@ def normalize_features(df, columns):
         logger.warning("No columns to normalize.")
     return df
 
-def engineer_features(df):
+def engineer_features(df, include_ticker_columns=True):
     logger.info("Columns at the start of feature engineering:")
     logger.info(df.columns)
+
+    # Preserve original ticker information
+    df['original_ticker'] = df['ticker']
 
     # Create lagged features
     df = create_lagged_features(df, ['volume', 'close', 'sentiment_score', 'sentiment_confidence'], [1, 7])
@@ -80,33 +83,41 @@ def engineer_features(df):
         df[f'sentiment_score_rolling_{window}'] = df.groupby('ticker')['sentiment_score'].rolling(window=window).mean().reset_index(0, drop=True)
         df[f'sentiment_confidence_rolling_{window}'] = df.groupby('ticker')['sentiment_confidence'].rolling(window=window).mean().reset_index(0, drop=True)
         df[f'weighted_sentiment_rolling_{window}'] = df.groupby('ticker')['weighted_sentiment'].rolling(window=window).mean().reset_index(0, drop=True)
-    
+
     # One-hot encode the 'ticker' column
+    one_hot_columns = []
     if 'ticker' in df.columns:
         try:
             encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
             ticker_encoded = encoder.fit_transform(df[['ticker']])
             
-            # Try to use get_feature_names_out for newer scikit-learn versions
             try:
                 feature_names = encoder.get_feature_names_out(['ticker'])
             except AttributeError:
-                # Fall back to get_feature_names for older versions
                 feature_names = encoder.get_feature_names(['ticker'])
             
             ticker_columns = pd.DataFrame(ticker_encoded, columns=feature_names, index=df.index)
-            df = pd.concat([df, ticker_columns], axis=1).drop('ticker', axis=1)
+            if include_ticker_columns:
+                df = pd.concat([df, ticker_columns], axis=1)
+            one_hot_columns = feature_names.tolist()
         except Exception as e:
             logger.error(f"Error during one-hot encoding: {str(e)}")
-            # if one-hot encoding fails, log the error but retain the 'ticker' column
             logger.warning("One-hot encoding failed. Retaining the 'ticker' column.")
     else:
         logger.warning("'ticker' column not found. Skipping one-hot encoding for tickers.")
 
+    # Remove the original 'ticker' and 'original_ticker' columns
+    df = df.drop(['ticker', 'original_ticker'], axis=1, errors='ignore')
+
     # Normalize numerical features
-    numerical_columns = df.select_dtypes(include=[np.number]).columns
+    columns_to_exclude = one_hot_columns + ['original_ticker']
+    numerical_columns = df.select_dtypes(include=[np.number]).columns.drop(columns_to_exclude, errors='ignore')
     df = normalize_features(df, numerical_columns)
-    
+
+    # Ensure all columns are numeric
+    numeric_columns = df.select_dtypes(include=['int64', 'float64']).columns
+    df = df[numeric_columns]
+
     logger.info("Columns at the end of feature engineering:")
     logger.info(df.columns)
     logger.info("Data types after feature engineering:")

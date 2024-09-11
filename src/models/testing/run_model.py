@@ -1,6 +1,6 @@
 from data_loader import load_data
-from model import train_model, plot_feature_importance
-from eval import evaluate_model, visualize_feature_importance
+from model import train_ticker_model, ConsolidatedModel, train_consolidated_model
+from eval import evaluate_model, visualize_feature_importance, evaluate_consolidated_model
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 import numpy as np
@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import os
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 def select_features_xgboost(X, y, num_features):
@@ -42,8 +42,57 @@ def select_features_rfe(X, y, num_features):
 def get_run_folder():
     return f"run {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
+def train_model(X_train, y_train):
+    model = XGBRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
+    model.fit(X_train, y_train)
+    return model
+
+def train_and_evaluate(X, y, cv):
+    results = []
+    for fold, (train_index, val_index) in enumerate(cv.split(X), 1):
+        X_train, X_val = X.iloc[train_index], X.iloc[val_index]
+        y_train, y_val = y.iloc[train_index], y.iloc[val_index]
+        
+        model = train_model(X_train, y_train)
+        
+        predictions = model.predict(X_val)
+        
+        rmse = np.sqrt(mean_squared_error(y_val, predictions))
+        mae = mean_absolute_error(y_val, predictions)
+        r2 = r2_score(y_val, predictions)
+        mape = mean_absolute_percentage_error(y_val, predictions)
+        
+        results.append({
+            'fold': fold,
+            'rmse': rmse,
+            'mae': mae,
+            'r2': r2,
+            'mape': mape,
+            'feature_importances': pd.Series(model.feature_importances_, index=X.columns)
+        })
+    
+    return results
+
+def plot_feature_importance(importances, feature_names, output_dir, title="Feature Importance"):
+    feature_importance = pd.Series(importances, index=feature_names).sort_values(ascending=False)
+    plt.figure(figsize=(10, 6))
+    feature_importance.plot(kind='bar')
+    plt.title(title)
+    plt.xlabel('Features')
+    plt.ylabel('Importance')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"{title.replace(' ', '_')}.png"))
+    plt.close()
+    logger.info(f"Feature importance plot saved to: {os.path.join(output_dir, f'{title.replace(' ', '_')}.png')}")
+
 def run_model():
     try:
+        # Create output directory
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        output_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "graph-output", f"run {timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Created output directory: {output_dir}")
+
         # Load data
         data_tuple = load_data()
         
@@ -106,121 +155,68 @@ def run_model():
         # Ensure y is aligned with X_engineered
         y = y.loc[X_engineered.index]
         
-        # Initialize TimeSeriesSplit
-        tscv = TimeSeriesSplit(n_splits=5)
-        
-        # Feature selection
-        num_features = X_engineered.shape[1] // 2  # Select half of the features
-        selected_features_xgb = select_features_xgboost(X_engineered, y, num_features)
-        selected_features_rfe = select_features_rfe(X_engineered, y, num_features)
+        # Group data by ticker
+        grouped_data = data.groupby('ticker')
 
-        # Train and evaluate model with all features
-        results_all = train_and_evaluate(X_engineered, y, tscv)
+        # Train ticker-specific models and evaluate
+        ticker_models = {}
+        ticker_performances = {}
+        for ticker, ticker_data in grouped_data:
+            X_ticker = engineer_features(ticker_data.drop(['close'], axis=1), include_ticker_columns=False)
+            y_ticker = ticker_data['close']
+            ticker_models[ticker] = train_ticker_model(X_ticker, y_ticker)
+            
+            # Evaluate ticker-specific model
+            predictions = ticker_models[ticker].predict(X_ticker)
+            rmse = np.sqrt(mean_squared_error(y_ticker, predictions))
+            mae = mean_absolute_error(y_ticker, predictions)
+            r2 = r2_score(y_ticker, predictions)
+            mape = mean_absolute_percentage_error(y_ticker, predictions)
+            da = calculate_directional_accuracy(y_ticker.values, predictions)
+            
+            ticker_performances[ticker] = {
+                "RMSE": rmse,
+                "MAE": mae,
+                "R²": r2,
+                "MAPE": mape,
+                "Directional Accuracy": da
+            }
+            
+            # Log performance for each ticker
+            logger.info(f"\nModel Performance for {ticker}:")
+            logger.info(f"RMSE: {rmse:.4f}")
+            logger.info(f"MAE: {mae:.4f}")
+            logger.info(f"R²: {r2:.4f}")
+            logger.info(f"MAPE: {mape:.4f}")
+            logger.info(f"Directional Accuracy: {da:.4f}")
+            
+            # Plot feature importance for each ticker
+            plot_feature_importance(ticker_models[ticker].feature_importances_, X_ticker.columns, output_dir, f"{ticker}_Feature_Importance")
 
-        # Train and evaluate model with XGBoost selected features
-        results_xgb = train_and_evaluate(X_engineered[selected_features_xgb], y, tscv)
+        # Output overall performance summary
+        logger.info("\nOverall Performance Summary:\n")
+        for ticker, performance in ticker_performances.items():
+            logger.info(f"{ticker}:")
+            for metric, value in performance.items():
+                logger.info(f"  {metric}: {value:.4f}")
+            logger.info("")  # Add an empty line between tickers
 
-        # Train and evaluate model with RFE selected features
-        results_rfe = train_and_evaluate(X_engineered[selected_features_rfe], y, tscv)
-
-        # Compare results
-        logger.info("\nResults with all features:")
-        log_results(results_all)
-
-        logger.info("\nResults with XGBoost selected features:")
-        log_results(results_xgb)
-
-        logger.info("\nResults with RFE selected features:")
-        log_results(results_rfe)
-
-        # Create a new folder for this run
-        run_folder = get_run_folder()
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        prism_dir = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-        output_dir = os.path.join(prism_dir, 'graph-output', run_folder)
-        
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-            logger.info(f"Created new output directory: {output_dir}")
-        except OSError as e:
-            logger.error(f"Error creating output directory: {e}")
-            raise
-
-        # Visualize feature importances
-        avg_feature_importance = pd.concat(results_all['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
-        visualize_feature_importance(avg_feature_importance, "Feature Importance - All Features", output_dir)
-        
-        xgb_importance = pd.Series(dict(zip(selected_features_xgb, avg_feature_importance[selected_features_xgb])))
-        visualize_feature_importance(xgb_importance, "Feature Importance - XGBoost Selected", output_dir)
-        
-        rfe_importance = pd.Series(dict(zip(selected_features_rfe, avg_feature_importance[selected_features_rfe])))
-        visualize_feature_importance(rfe_importance, "Feature Importance - RFE Selected", output_dir)
-
-        logger.info(f"Feature importance plots have been saved to the '{output_dir}' directory.")
-
-        # Train final model on all data
-        final_model_tuple = train_model(X_engineered, y)
-        final_model = final_model_tuple[0]  # assuming the model is the first element of the tuple
-        
-        # evaluate final model
-        final_predictions = final_model.predict(X_engineered)
-        final_rmse = np.sqrt(mean_squared_error(y, final_predictions))
-        final_mae = mean_absolute_error(y, final_predictions)
-        final_r2 = r2_score(y, final_predictions)
-        final_mape = mean_absolute_percentage_error(y, final_predictions)
-        final_da = calculate_directional_accuracy(y.values, final_predictions)  # Convert y to numpy array
-        
-        logger.info("\nFinal Model Performance:")
-        logger.info(f"RMSE: {final_rmse:.4f}")
-        logger.info(f"MAE: {final_mae:.4f}")
-        logger.info(f"R²: {final_r2:.4f}")
-        logger.info(f"MAPE: {final_mape:.4f}")
-        logger.info(f"Directional Accuracy: {final_da:.4f}")
-        
-        # plot final feature importance
-        plot_feature_importance(final_model.feature_importances_, X_engineered.columns)
+        logger.info(f"All model evaluations and feature importance plots have been saved to the '{output_dir}' directory.")
 
     except Exception as e:
         logger.error(f"An error occurred during model execution: {str(e)}")
         raise
 
-def train_and_evaluate(X, y, tscv):
-    train_scores = []
-    test_scores = []
-    feature_importances = []
-
-    for train_index, test_index in tqdm(tscv.split(X), desc="Cross-validation", total=5):
-        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-
-        model_tuple = train_model(X_train, y_train)
-        model = model_tuple[0]
-
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
-        test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
-
-        train_scores.append(train_rmse)
-        test_scores.append(test_rmse)
-
-        importance = model.feature_importances_
-        feature_importances.append(pd.Series(importance, index=X_train.columns))
-
-    return {
-        'train_scores': train_scores,
-        'test_scores': test_scores,
-        'feature_importances': feature_importances
-    }
-
 def log_results(results):
-    logger.info(f"Average Train RMSE: {np.mean(results['train_scores']):.4f} (+/- {np.std(results['train_scores']):.4f})")
-    logger.info(f"Average Test RMSE: {np.mean(results['test_scores']):.4f} (+/- {np.std(results['test_scores']):.4f})")
+    rmse_scores = [result['rmse'] for result in results]
+    mae_scores = [result['mae'] for result in results]
+    r2_scores = [result['r2'] for result in results]
+    mape_scores = [result['mape'] for result in results]
 
-    avg_feature_importance = pd.concat(results['feature_importances'], axis=1).mean(axis=1).sort_values(ascending=False)
-    logger.info("\nTop 10 features:")
-    logger.info(avg_feature_importance.head(10))
+    logger.info(f"Average RMSE: {np.mean(rmse_scores):.4f} (+/- {np.std(rmse_scores):.4f})")
+    logger.info(f"Average MAE: {np.mean(mae_scores):.4f} (+/- {np.std(mae_scores):.4f})")
+    logger.info(f"Average R²: {np.mean(r2_scores):.4f} (+/- {np.std(r2_scores):.4f})")
+    logger.info(f"Average MAPE: {np.mean(mape_scores):.4f} (+/- {np.std(mape_scores):.4f})")
 
 def calculate_directional_accuracy(y_true, y_pred):
     # calculate the direction of change
@@ -232,6 +228,36 @@ def calculate_directional_accuracy(y_true, y_pred):
     total_predictions = len(y_true_direction)
     
     return correct_directions / total_predictions
+
+def evaluate_ticker_model(model, X, y, ticker):
+    predictions = model.predict(X)
+    rmse = np.sqrt(mean_squared_error(y, predictions))
+    mae = mean_absolute_error(y, predictions)
+    r2 = r2_score(y, predictions)
+    mape = mean_absolute_percentage_error(y, predictions)
+    da = calculate_directional_accuracy(y.values, predictions)
+
+    logger.info(f"\nModel Performance for {ticker}:")
+    logger.info(f"RMSE: {rmse:.4f}")
+    logger.info(f"MAE: {mae:.4f}")
+    logger.info(f"R²: {r2:.4f}")
+    logger.info(f"MAPE: {mape:.4f}")
+    logger.info(f"Directional Accuracy: {da:.4f}")
+
+def evaluate_consolidated_model(model, X, y):
+    predictions = model.predict(X)
+    rmse = np.sqrt(mean_squared_error(y, predictions))
+    mae = mean_absolute_error(y, predictions)
+    r2 = r2_score(y, predictions)
+    mape = mean_absolute_percentage_error(y, predictions)
+    da = calculate_directional_accuracy(y.values, predictions)
+
+    logger.info("\nConsolidated Model Performance:")
+    logger.info(f"RMSE: {rmse:.4f}")
+    logger.info(f"MAE: {mae:.4f}")
+    logger.info(f"R²: {r2:.4f}")
+    logger.info(f"MAPE: {mape:.4f}")
+    logger.info(f"Directional Accuracy: {da:.4f}")
 
 if __name__ == "__main__":
     run_model()
