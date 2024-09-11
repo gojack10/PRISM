@@ -1,16 +1,32 @@
 import pandas as pd
-from sklearn.metrics import make_scorer, mean_squared_error
+from sklearn.metrics import make_scorer, mean_squared_error, mean_absolute_error, r2_score, mean_absolute_percentage_error
 import xgboost as xgb
 import matplotlib.pyplot as plt
 from sklearn.model_selection import GridSearchCV, ParameterGrid, KFold, train_test_split
 from xgboost import XGBRegressor
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder, StandardScaler
 from tqdm import tqdm
 import os
 import logging
 
+from data_loader import load_data 
+
 logger = logging.getLogger(__name__)
+
+def preprocess_data(X):
+    # convert to dataframe if not already
+    X = pd.DataFrame(X)
+    
+    # handle categorical variables
+    for column in X.select_dtypes(include=['object']).columns:
+        X[column] = pd.Categorical(X[column]).codes
+    
+    # scale numerical features
+    scaler = StandardScaler()
+    X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+    
+    return X
 
 def evaluate_model(model, X_train, y_train, X_test, y_test, ticker=None):
     param_grid = {

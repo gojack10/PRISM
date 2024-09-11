@@ -42,6 +42,9 @@ def select_features_rfe(X, y, num_features):
 def get_run_folder():
     return f"run {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
+def get_project_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
 def train_model(X_train, y_train):
     model = XGBRegressor(n_estimators=100, learning_rate=0.1, random_state=42)
     model.fit(X_train, y_train)
@@ -89,7 +92,8 @@ def run_model():
     try:
         # Create output directory
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        output_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "graph-output", f"run {timestamp}")
+        project_root = get_project_root()
+        output_dir = os.path.join(project_root, "graph-output", f"run {timestamp}")
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Created output directory: {output_dir}")
 
