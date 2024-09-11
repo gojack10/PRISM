@@ -116,3 +116,54 @@ def evaluate_model_performance(model, X_test, y_test):
         print(f"{ticker}: {rmse}")
 
     return ticker_rmse
+
+# Add these new functions at the end of the file
+
+def train_ticker_model(X, y, params=None):
+    if params is None:
+        params = {
+            'max_depth': 6,
+            'learning_rate': 0.05,
+            'n_estimators': 300,
+            'subsample': 0.9,
+            'colsample_bytree': 0.9,
+        }
+    
+    model = xgb.XGBRegressor(**params, early_stopping_rounds=15, eval_metric='rmse')
+    
+    # Split data for early stopping
+    split_point = int(0.8 * len(X))
+    X_train, X_val = X[:split_point], X[split_point:]
+    y_train, y_val = y[:split_point], y[split_point:]
+    
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+    return model
+
+class ConsolidatedModel:
+    def __init__(self, ticker_models):
+        self.ticker_models = ticker_models
+    
+    def predict(self, X):
+        predictions = []
+        for idx, row in X.iterrows():
+            ticker = self._get_ticker(row)
+            if ticker in self.ticker_models:
+                model = self.ticker_models[ticker]
+                # Remove ticker columns before prediction
+                features = row.drop([col for col in row.index if col.startswith('ticker_')])
+                pred = model.predict(features.to_frame().T)[0]
+            else:
+                # Handle unseen tickers (e.g., use an average prediction)
+                pred = np.mean([model.predict(row.drop([col for col in row.index if col.startswith('ticker_')]).to_frame().T)[0] for model in self.ticker_models.values()])
+            predictions.append(pred)
+        return np.array(predictions)
+
+    def _get_ticker(self, row):
+        ticker_columns = [col for col in row.index if col.startswith('ticker_')]
+        if ticker_columns:
+            return ticker_columns[row[ticker_columns].argmax()].split('_')[1]
+        raise ValueError("Unable to determine ticker from input data")
+
+def train_consolidated_model(X, y, ticker_models):
+    return ConsolidatedModel(ticker_models)
