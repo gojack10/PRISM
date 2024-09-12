@@ -9,3 +9,4 @@ matplotlib
 sqlalchemy
 ratelimit
 tqdm
+pycaret
