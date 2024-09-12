@@ -1,7 +1,5 @@
 /data/
-
-/config/.env
-/config/config.yaml
+/config/
 
 .DS_Store
 

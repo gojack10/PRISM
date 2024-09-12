@@ -86,7 +86,9 @@ def plot_feature_importance(importances, feature_names, output_dir, title="Featu
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f"{title.replace(' ', '_')}.png"))
     plt.close()
-    logger.info(f"Feature importance plot saved to: {os.path.join(output_dir, f'{title.replace(' ', '_')}.png')}")
+    file_name = f"{title.replace(' ', '_')}.png"
+    full_path = os.path.join(output_dir, file_name)
+    logger.info(f"Feature importance plot saved to: {full_path}")
 
 def run_model():
     try:
