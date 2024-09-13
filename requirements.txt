@@ -10,3 +10,5 @@ sqlalchemy
 ratelimit
 tqdm
 pycaret
+crawl4ai @ git+https://github.com/unclecode/crawl4ai.git
+beautifulsoup4
