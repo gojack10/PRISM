@@ -4,6 +4,8 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 from dotenv import load_dotenv
 import logging
+import psycopg2
+import concurrent.futures
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,6 +26,42 @@ with open(config_path, 'r') as config_file:
 
 TICKERS = config.get('tickers', [])
 
+# Define indicators with their specific columns and desired aliases
+INDICATORS = {
+    'BBANDS': {
+        'columns': ['Real Upper Band', 'Real Middle Band', 'Real Lower Band'],
+        'aliases': ['BBANDS_REAL_UPPER_BAND', 'BBANDS_REAL_MIDDLE_BAND', 'BBANDS_REAL_LOWER_BAND']
+    },
+    'ATR': {
+        'columns': ['ATR'],
+        'aliases': ['ATR_ATR']
+    },
+    'EMA': {
+        'columns': ['EMA'],
+        'aliases': ['EMA_EMA']
+    },
+    'MACD': {
+        'columns': ['MACD', 'MACD_Signal', 'MACD_Hist'],
+        'aliases': ['MACD_MACD', 'MACD_MACD_SIGNAL', 'MACD_MACD_HIST']
+    },
+    'OBV': {
+        'columns': ['OBV'],
+        'aliases': ['OBV_OBV']
+    },
+    'ROC': {
+        'columns': ['ROC'],
+        'aliases': ['ROC_ROC']
+    },
+    'RSI': {
+        'columns': ['RSI'],
+        'aliases': ['RSI_RSI']
+    },
+    'SMA': {
+        'columns': ['SMA'],
+        'aliases': ['SMA_SMA']
+    }
+}
+
 # Database connection details
 db_user = os.getenv('DB_USER')
 db_password = os.getenv('DB_PASSWORD')
@@ -38,7 +76,7 @@ logging.info(f"DB_PASSWORD: {'***' if db_password else None}")
 logging.info(f"DB_HOST: {db_host}")
 logging.info(f"DB_PORT: {db_port}")
 logging.info(f"DB_NAME: {db_name}")
-logging.info(f"Database URL: postgresql+psycopg2://{db_user}:***@{db_host}:{db_port}/{db_name}")
+logging.info(f"Indicators: {INDICATORS}")
 logging.info("==================================\n")
 
 # Check if all necessary environment variables are set
@@ -51,111 +89,95 @@ for var_name, var_value in [('DB_USER', db_user), ('DB_PASSWORD', db_password),
 if missing_vars:
     raise ValueError(f"Missing database connection details for: {', '.join(missing_vars)}. Please check your .env file.")
 
-# Construct the database URL
-db_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+def build_sql_query(ticker, indicators):
+    select_fields = "i.*, "
+    lateral_joins = ""
 
-# Create the engine
-try:
-    engine = create_engine(db_url)
-    # Test the connection
-    with engine.connect() as conn:
-        logging.info("Successfully connected to the database.")
-except Exception as e:
-    logging.error(f"Error connecting to the database: {e}")
-    raise
+    # Define indicators and their respective columns
+    indicator_columns = {
+        'BBANDS': ['Real Upper Band', 'Real Middle Band', 'Real Lower Band'],
+        'ATR': ['ATR'],
+        'EMA': ['EMA'],
+        'MACD': ['MACD', 'MACD_Signal', 'MACD_Hist'],
+        'OBV': ['OBV'],
+        'ROC': ['ROC'],
+        'RSI': ['RSI'],
+        'SMA': ['SMA']
+    }
+
+    for indicator, columns in indicator_columns.items():
+        table_name = f"indicator_{ticker.lower()}_{indicator.lower()}_indicator"
+        for column in columns:
+            # Create a unique alias by combining indicator and column, replacing spaces with underscores
+            alias = f"{indicator}_{column.replace(' ', '_')}".upper()
+
+            # Append to SELECT clause with proper quoting
+            select_fields += f'"{alias}"."{column}" AS "{alias}", '
+
+            # Append to LATERAL JOIN clause with consistent quoting
+            lateral_joins += f"""
+    LEFT JOIN LATERAL (
+        SELECT "{column}"
+        FROM {table_name} "{alias}"
+        WHERE "{alias}"."timestamp" <= i."timestamp"
+        ORDER BY "{alias}"."timestamp" DESC
+        LIMIT 1
+    ) "{alias}" ON true
+            """
+
+    # Remove trailing comma and space from SELECT fields
+    select_fields = select_fields.rstrip(', ')
+
+    # Construct the final SQL query
+    sql_query = f"""
+SELECT 
+    {select_fields}
+FROM 
+    intraday_{ticker.lower()}_intraday i
+{lateral_joins}
+ORDER BY i."timestamp"
+LIMIT 80;
+    """
+    return sql_query
 
 def load_data():
-    """
-    Loads intraday and indicator data for each ticker from the database.
-    Sentiment data is currently excluded until more comprehensive data is available.
-    """
-    # SQL query to retrieve all data without the sentiment join
-    query = """
-    SELECT *
-    FROM intraday_{ticker}_intraday
-    JOIN indicator_{ticker}_atr_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_bbands_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_ema_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_macd_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_obv_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_roc_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_rsi_indicator USING ("timestamp")
-    JOIN indicator_{ticker}_sma_indicator USING ("timestamp")
-    """
-    
-    # Log the query before formatting
-    logging.debug("Initial SQL Query Template:")
-    logging.debug(query)
-
-    # Count occurrences of 'JOIN sentiment'
-    join_sentiment_count = query.count("JOIN sentiment")
-    logging.debug(f"'JOIN sentiment' occurs {join_sentiment_count} time(s) in the query template.")
-
+    # Create the SQLAlchemy engine
+    engine = create_engine(f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
     all_data = []
 
-    for ticker in TICKERS:
-        logging.info(f"Loading data for ticker: {ticker}")
-        try:
-            with engine.connect() as conn:
-                logging.info(f"Executing SQL query for ticker: {ticker.lower()}")
+    with engine.connect() as conn:
+        for ticker in TICKERS:
+            logging.info(f"Loading data for ticker: {ticker}")
+            try:
+                sql_query = build_sql_query(ticker, INDICATORS)
+                logging.debug(f"Generated SQL Query for {ticker}:\n{sql_query[:500]}...")  # Log first 500 chars
 
-                # Format the query
-                formatted_query = query.format(
-                    ticker=ticker.lower(),
-                    ticker_condition=f"ticker = '{ticker.lower()}'"  # Adjust the WHERE condition if necessary
-                )
-                logging.debug(f"Formatted SQL Query for {ticker}:\n{formatted_query}")
-
-                # Additional debugging
-                query_length = len(formatted_query)
-                logging.debug(f"Formatted query length: {query_length} characters.")
-                join_sentiment_count = formatted_query.count("JOIN sentiment")
-                logging.debug(f"'JOIN sentiment' occurs {join_sentiment_count} time(s) in the formatted query.")
-
-                # Optionally, log the first and last 500 characters to avoid overwhelming the logs
-                if query_length > 1000:
-                    logging.debug(f"Formatted Query Snippet for {ticker}:\n{formatted_query[:500]}...\n...\n{formatted_query[-500:]}")
-                else:
-                    logging.debug(f"Formatted Query Content:\n{formatted_query}")
+                logging.info(f"Executing SQL query for ticker: {ticker}")
+                query_start_time = pd.Timestamp.now()
 
                 # Execute the query
-                sql_query = text(formatted_query)
-                df = pd.read_sql_query(sql_query, conn)
+                df = pd.read_sql_query(text(sql_query), conn)
 
-                logging.info(f"Rows retrieved for {ticker}: {len(df)}")
+                query_end_time = pd.Timestamp.now()
+                duration = (query_end_time - query_start_time).total_seconds()
+                logging.info(f"Query executed in {duration} seconds for ticker {ticker}")
 
-        except Exception as e:
-            logging.error(f"Error loading data for ticker {ticker}: {e}")
-            continue
+                logging.info(f"Rows retrieved for ticker {ticker}: {len(df)}")
 
-        # Data preprocessing
-        logging.info(f"Preprocessing data for ticker: {ticker}")
-        if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            df = df.rename(columns={'timestamp': 'date'})
-            logging.info("Renamed 'timestamp' column to 'date'")
-        else:
-            logging.warning(f"'timestamp' column not found in data for {ticker}")
+            except Exception as e:
+                logging.error(f"Error loading data for ticker {ticker}: {e}")
+                # Rollback the failed transaction
+                conn.execute("ROLLBACK")
+                continue
 
-        if 'date' not in df.columns:
-            logging.warning(f"'date' column not found after renaming for {ticker}")
-        else:
-            df = df.set_index('date')
-            logging.info("Set 'date' as index")
-
-        if df.index.nunique() < 50:
-            logging.warning("Not enough unique dates for time series modeling.")
-            # Optionally, you can choose to continue or skip adding this ticker's data
-            continue
-
-        all_data.append(df)
-
-        logging.info(f"Loaded data for {ticker}:")
-        logging.info(f"Shape: {df.shape}")
-        logging.info(f"Columns: {df.columns.tolist()}")
-        logging.info(f"First few rows:")
-        logging.info(f"\n{df.head()}")
-        logging.info("\n" + "="*50 + "\n")
+            # Data preprocessing steps...
+            df.rename(columns={'timestamp': 'date'}, inplace=True)
+            df.set_index('date', inplace=True)
+            all_data.append(df)
+            logging.info(f"Loaded and processed data for ticker {ticker}:")
+            logging.info(f"Shape: {df.shape}")
+            logging.info(f"Columns: {df.columns.tolist()}")
+            logging.info("\n" + "="*50 + "\n")
 
     if not all_data:
         raise ValueError("No data was loaded. Please check your SQL queries and database connection.")
@@ -170,7 +192,13 @@ def load_data():
     logging.info(f"First few rows:")
     logging.info(f"\n{combined_df.head()}")
 
+    # DEBUG: Export the combined DataFrame to a CSV file for inspection
+    # Uncomment the following lines during debugging and comment them out after resolving issues
+    # debug_csv_path = os.path.join(project_root, 'combined_data_debug.csv')
+    # combined_df.to_csv(debug_csv_path)
+    # logging.debug(f"Exported combined DataFrame to CSV at: {debug_csv_path}")
+
     return combined_df
 
 if __name__ == "__main__":
-    load_data()
+    combined_data = load_data()
