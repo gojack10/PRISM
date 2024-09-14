@@ -1,138 +1,110 @@
-import pandas as pd
-from sqlalchemy import create_engine
 import os
+import yaml
+from sqlalchemy import create_engine
+import pandas as pd
+from dotenv import load_dotenv
+
+# Determine the project root directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+
+# Path to the .env file
+dotenv_path = os.path.join(project_root, 'config', '.env')
+load_dotenv(dotenv_path)
+
+# Load config
+config_path = os.path.join(project_root, 'config', 'config.yaml')
+
+with open(config_path, 'r') as config_file:
+    config = yaml.safe_load(config_file)
+
+TICKERS = config.get('tickers', [])
+
+# Database connection details
+db_user = os.getenv('DB_USER')
+db_password = os.getenv('DB_PASSWORD')
+db_host = os.getenv('DB_HOST')
+db_port = os.getenv('DB_PORT', '5432')  # Default to 5432 if not set
+db_name = os.getenv('DB_NAME')
+
+# Debugging: Print environment variables to verify they're loaded correctly
+print("=== Database Connection Details ===")
+print(f"DB_USER: {db_user}")
+print(f"DB_PASSWORD: {db_password}")
+print(f"DB_HOST: {db_host}")
+print(f"DB_PORT: {db_port}")
+print(f"DB_NAME: {db_name}")
+print(f"Database URL: postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+print("==================================\n")
+
+# Check if all necessary environment variables are set
+missing_vars = []
+for var_name, var_value in [('DB_USER', db_user), ('DB_PASSWORD', db_password), 
+                            ('DB_HOST', db_host), ('DB_NAME', db_name)]:
+    if not var_value:
+        missing_vars.append(var_name)
+
+if missing_vars:
+    raise ValueError(f"Missing database connection details for: {', '.join(missing_vars)}. Please check your .env file.")
+
+# Construct the database URL
+db_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+# Create the engine
+try:
+    engine = create_engine(db_url)
+    # Test the connection
+    with engine.connect() as conn:
+        pass
+except Exception as e:
+    print(f"Error connecting to the database: {e}")
+    raise
 
 def load_data():
-    # Database connection
-    db_path = "/mnt/SSD_Storage/Documents/coding-projects/PRISM/data/processed/market_data.db"
-    engine = create_engine(f"sqlite:///{db_path}")
+    # SQL query to retrieve all data
+    query = """
+    SELECT * FROM intraday_{ticker}_intraday
+    JOIN indicator_{ticker}_atr_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_bbands_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_ema_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_macd_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_obv_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_roc_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_rsi_indicator USING ("timestamp")
+    JOIN indicator_{ticker}_sma_indicator USING ("timestamp")
+    JOIN sentiment ON intraday_{ticker}_intraday."timestamp" BETWEEN sentiment.timestamp_from AND sentiment.timestamp_to
+    WHERE sentiment.ticker = '{ticker}'
+    """
     
-    tickers = ['AAPL', 'NVDA', 'GOOG']
     all_data = []
-
-    for ticker in tickers:
-        query = f"""
-        WITH latest_company_overview AS (
-            SELECT *
-            FROM company_overview
-            WHERE ticker = '{ticker}'
-        ),
-        latest_stock_sentiment AS (
-            SELECT *
-            FROM stock_sentiment
-            WHERE ticker = '{ticker}'
-        )
-        SELECT 
-            i.date, 
-            '{ticker}' AS ticker,
-            i.open, 
-            i.high, 
-            i.low, 
-            i.close, 
-            i.volume,
-            s.sentiment_score,
-            s.sentiment_confidence,
-            s.key_topics,
-            s.sentiment_change,
-            s.financial_metrics,
-            s.short_term_outlook,
-            s.long_term_outlook,
-            co.PERatio,
-            co.PEGRatio,
-            co.PriceToBookRatio,
-            co.OperatingMarginTTM,
-            co.ReturnOnEquityTTM,
-            co.QuarterlyEarningsGrowthYOY,
-            co.QuarterlyRevenueGrowthYOY,
-            co.DividendYield,
-            co.AnalystTargetPrice,
-            co."50DayMovingAverage",
-            co."200DayMovingAverage",
-            co.Beta,
-            co.MarketCapitalization,
-            sma.value AS sma_value,
-            macd.macd AS macd_line,
-            macd.macd_signal AS signal_line,
-            macd.macd_hist AS macd_histogram,
-            rsi.value AS rsi_value,
-            bb.real_upper_band,
-            bb.real_middle_band,
-            bb.real_lower_band,
-            obv.value AS obv_value,
-            cci.value AS cci_value
-        FROM intraday_{ticker} i
-        LEFT JOIN latest_stock_sentiment s ON s.date <= i.date
-        LEFT JOIN latest_company_overview co ON co.date <= i.date
-        LEFT JOIN indicator_sma_{ticker} sma ON i.date = sma.date
-        LEFT JOIN indicator_macd_{ticker} macd ON i.date = macd.date
-        LEFT JOIN indicator_rsi_{ticker} rsi ON i.date = rsi.date
-        LEFT JOIN indicator_bbands_{ticker} bb ON i.date = bb.date
-        LEFT JOIN indicator_obv_{ticker} obv ON i.date = obv.date
-        LEFT JOIN indicator_cci_{ticker} cci ON i.date = cci.date
-        ORDER BY i.date ASC
-        """
+    
+    for ticker in TICKERS:
+        # Load data into DataFrame
+        df = pd.read_sql_query(query.format(ticker=ticker.lower()), engine)
         
-        df = pd.read_sql(query, engine)
+        # Data preprocessing
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        df['ticker'] = ticker
+        
         all_data.append(df)
-
-    # Combine data from all tickers
-    combined_data = pd.concat(all_data, ignore_index=True)
-
-    # Convert date to datetime and set as index
-    combined_data['date'] = pd.to_datetime(combined_data['date'])
-    combined_data.set_index('date', inplace=True)
-
-    # Handle missing values
-    combined_data = handle_missing_values(combined_data)
-
-    # Add any additional derived features
-    combined_data = add_derived_features(combined_data)
-
-    # Drop rows with NaN values created by rolling computations
-    combined_data.dropna(inplace=True)
-
-    # Verify data sufficiency
-    print(f"Total rows in combined dataset: {len(combined_data)}")
-    print(f"Number of unique dates: {combined_data.index.nunique()}")
-    print(f"Date range: {combined_data.index.min()} to {combined_data.index.max()}")
-    print(f"Columns in the dataset: {combined_data.columns.tolist()}")
-    print(combined_data.info())
-
-    return combined_data
-
-def handle_missing_values(df):
-    # Fill missing values for numerical columns with group-wise mean
-    numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns
-    df[numeric_columns] = df.groupby('ticker')[numeric_columns].transform(lambda x: x.fillna(x.mean()))
+        
+        print(f"Loaded data for {ticker}:")
+        print(f"Shape: {df.shape}")
+        print(f"Columns: {df.columns.tolist()}")
+        print(f"First few rows:")
+        print(df.head())
+        print("\n" + "="*50 + "\n")
     
-    # For sentiment-related columns, fill with neutral values
-    sentiment_columns = ['sentiment_score', 'sentiment_confidence']
-    df[sentiment_columns] = df[sentiment_columns].fillna(0)
+    # Combine all dataframes
+    combined_df = pd.concat(all_data, ignore_index=True)
     
-    # For text columns, fill with 'Unknown'
-    text_columns = ['key_topics', 'sentiment_change', 'financial_metrics', 'short_term_outlook', 'long_term_outlook']
-    df[text_columns] = df[text_columns].fillna('Unknown')
+    print("Combined DataFrame:")
+    print(f"Shape: {combined_df.shape}")
+    print(f"Columns: {combined_df.columns.tolist()}")
+    print(f"First few rows:")
+    print(combined_df.head())
     
-    return df
-
-def add_derived_features(df):
-    # Add percentage change in close price
-    df['close_pct_change'] = df.groupby('ticker')['close'].pct_change()
-    
-    # Add rolling mean of volume (e.g., 5-day rolling mean)
-    df['volume_rolling_mean'] = df.groupby('ticker')['volume'].rolling(window=5, min_periods=1).mean().reset_index(0, drop=True)
-    
-    # Add a binary column for whether close price is above SMA
-    df['above_sma'] = (df['close'] > df['sma_value']).astype(int)
-    
-    # Add volatility (e.g., 20-day rolling standard deviation of returns)
-    df['volatility'] = df.groupby('ticker')['close_pct_change'].rolling(window=20, min_periods=1).std().reset_index(0, drop=True)
-    
-    # Add MACD crossover signal
-    df['macd_crossover'] = ((df['macd_line'] > df['signal_line']) & (df['macd_line'].shift(1) <= df['signal_line'].shift(1))).astype(int)
-    
-    return df
+    return combined_df
 
 if __name__ == "__main__":
-    data = load_data()
-    print(data.head())
+    load_data()
