@@ -4,11 +4,10 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 from dotenv import load_dotenv
 import logging
-import psycopg2
 import concurrent.futures
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Determine the project root directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -69,19 +68,9 @@ db_host = os.getenv('DB_HOST')
 db_port = os.getenv('DB_PORT', '5432')  # Default to 5432 if not set
 db_name = os.getenv('DB_NAME')
 
-# Debugging: Print environment variables to verify they're loaded correctly
-logging.info("=== Database Connection Details ===")
-logging.info(f"DB_USER: {db_user}")
-logging.info(f"DB_PASSWORD: {'***' if db_password else None}")
-logging.info(f"DB_HOST: {db_host}")
-logging.info(f"DB_PORT: {db_port}")
-logging.info(f"DB_NAME: {db_name}")
-logging.info(f"Indicators: {INDICATORS}")
-logging.info("==================================\n")
-
 # Check if all necessary environment variables are set
 missing_vars = []
-for var_name, var_value in [('DB_USER', db_user), ('DB_PASSWORD', db_password), 
+for var_name, var_value in [('DB_USER', db_user), ('DB_PASSWORD', db_password),
                             ('DB_HOST', db_host), ('DB_NAME', db_name)]:
     if not var_value:
         missing_vars.append(var_name)
@@ -117,7 +106,7 @@ def build_sql_query(ticker, indicators):
             # Append to LATERAL JOIN clause with consistent quoting
             lateral_joins += f"""
     LEFT JOIN LATERAL (
-        SELECT "{column}"
+        SELECT "{column}", "timestamp"
         FROM {table_name} "{alias}"
         WHERE "{alias}"."timestamp" <= i."timestamp"
         ORDER BY "{alias}"."timestamp" DESC
@@ -128,56 +117,78 @@ def build_sql_query(ticker, indicators):
     # Remove trailing comma and space from SELECT fields
     select_fields = select_fields.rstrip(', ')
 
-    # Construct the final SQL query
+    # Construct the final SQL query without LIMIT
     sql_query = f"""
 SELECT 
     {select_fields}
 FROM 
     intraday_{ticker.lower()}_intraday i
 {lateral_joins}
-ORDER BY i."timestamp"
-LIMIT 80;
+ORDER BY i."timestamp";
     """
     return sql_query
 
-def load_data():
-    # Create the SQLAlchemy engine
-    engine = create_engine(f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+def process_ticker(ticker):
+    logging.info(f"Processing ticker: {ticker}")
+    try:
+        sql_query = build_sql_query(ticker, INDICATORS)
+        logging.debug(f"Generated SQL Query for {ticker}:\n{sql_query}")
+
+        # Create a new engine for each thread to avoid thread-safety issues
+        engine = create_engine(f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+
+        with engine.connect() as conn:
+            logging.info(f"Executing SQL query for ticker: {ticker}")
+            query_start_time = pd.Timestamp.now()
+
+            # Execute the query
+            df = pd.read_sql_query(text(sql_query), conn)
+
+            query_end_time = pd.Timestamp.now()
+            duration = (query_end_time - query_start_time).total_seconds()
+            logging.info(f"Query executed in {duration} seconds for ticker {ticker}")
+            logging.info(f"Rows retrieved for ticker {ticker}: {len(df)}")
+
+        df.rename(columns={'timestamp': 'date'}, inplace=True)
+        df.set_index('date', inplace=True)
+
+        # add the ticker column
+        df['ticker'] = ticker 
+
+        logging.info(f"Loaded and processed data for ticker {ticker}:")
+        logging.info(f"Shape: {df.shape}")
+        logging.info(f"Columns: {df.columns.tolist()}")
+        logging.info("\n" + "="*50 + "\n")
+
+        # Optionally save individual ticker data to CSV for debugging
+        # Uncomment the following lines during debugging
+        # debug_csv_path = os.path.join(project_root, 'output', f'{ticker}_data_debug.csv')
+        # df.to_csv(debug_csv_path)
+        # logging.debug(f"Exported {ticker} DataFrame to CSV at: {debug_csv_path}")
+
+        return df
+
+    except Exception as e:
+        logging.error(f"Error processing ticker {ticker}: {e}")
+        return None
+
+def load_data_parallel():
     all_data = []
 
-    with engine.connect() as conn:
-        for ticker in TICKERS:
-            logging.info(f"Loading data for ticker: {ticker}")
+    # Define the maximum number of worker threads
+    max_workers = min(5, len(TICKERS))  # Adjust based on your system's capabilities
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_ticker = {executor.submit(process_ticker, ticker): ticker for ticker in TICKERS}
+
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            ticker = future_to_ticker[future]
             try:
-                sql_query = build_sql_query(ticker, INDICATORS)
-                logging.debug(f"Generated SQL Query for {ticker}:\n{sql_query[:500]}...")  # Log first 500 chars
-
-                logging.info(f"Executing SQL query for ticker: {ticker}")
-                query_start_time = pd.Timestamp.now()
-
-                # Execute the query
-                df = pd.read_sql_query(text(sql_query), conn)
-
-                query_end_time = pd.Timestamp.now()
-                duration = (query_end_time - query_start_time).total_seconds()
-                logging.info(f"Query executed in {duration} seconds for ticker {ticker}")
-
-                logging.info(f"Rows retrieved for ticker {ticker}: {len(df)}")
-
+                df = future.result()
+                if df is not None:
+                    all_data.append(df)
             except Exception as e:
-                logging.error(f"Error loading data for ticker {ticker}: {e}")
-                # Rollback the failed transaction
-                conn.execute("ROLLBACK")
-                continue
-
-            # Data preprocessing steps...
-            df.rename(columns={'timestamp': 'date'}, inplace=True)
-            df.set_index('date', inplace=True)
-            all_data.append(df)
-            logging.info(f"Loaded and processed data for ticker {ticker}:")
-            logging.info(f"Shape: {df.shape}")
-            logging.info(f"Columns: {df.columns.tolist()}")
-            logging.info("\n" + "="*50 + "\n")
+                logging.error(f"Exception occurred for ticker {ticker}: {e}")
 
     if not all_data:
         raise ValueError("No data was loaded. Please check your SQL queries and database connection.")
@@ -192,8 +203,8 @@ def load_data():
     logging.info(f"First few rows:")
     logging.info(f"\n{combined_df.head()}")
 
-    # DEBUG: Export the combined DataFrame to a CSV file for inspection
-    # Uncomment the following lines during debugging and comment them out after resolving issues
+    # Optionally export the combined DataFrame to a CSV file for inspection
+    # Uncomment the following lines during debugging
     # debug_csv_path = os.path.join(project_root, 'combined_data_debug.csv')
     # combined_df.to_csv(debug_csv_path)
     # logging.debug(f"Exported combined DataFrame to CSV at: {debug_csv_path}")
@@ -201,4 +212,4 @@ def load_data():
     return combined_df
 
 if __name__ == "__main__":
-    combined_data = load_data()
+    combined_data = load_data_parallel()
