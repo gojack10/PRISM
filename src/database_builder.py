@@ -5,19 +5,76 @@ import numpy as np
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError, OperationalError, SQLAlchemyError
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def main():
-    # Load environment variables
-    load_dotenv()
-
-    # Database connection details
-    db_url = f"postgresql+psycopg2://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-    engine = create_engine(db_url)
-
-    # Get project root directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
-
+    if not os.path.basename(project_root) == 'PRISM':
+        raise ValueError("Unexpected directory structure. Make sure this script is in the PRISM/src directory.")
+    
+    dotenv_path = os.path.join(project_root, 'config', '.env')
+    
+    if not os.path.exists(dotenv_path):
+        logging.error(f".env file not found at {dotenv_path}")
+        raise FileNotFoundError(f".env file not found at {dotenv_path}")
+    
+    # Load environment variables from the specified .env file
+    loaded = load_dotenv(dotenv_path, override=True)
+    if loaded:
+        logging.info(f"Successfully loaded .env file from {dotenv_path}")
+    else:
+        logging.error(f"Failed to load .env file from {dotenv_path}")
+        raise FileNotFoundError(f"Failed to load .env file from {dotenv_path}")
+    
+    # Database connection details
+    db_user = os.getenv('DB_USER')
+    db_password = os.getenv('DB_PASSWORD')
+    db_host = os.getenv('DB_HOST')
+    db_port = os.getenv('DB_PORT', '5432')  # Default to 5432 if not set
+    db_name = os.getenv('DB_NAME')
+    
+    # Debugging: Print environment variables to verify they're loaded correctly
+    logging.info("=== Database Connection Details ===")
+    logging.info(f"DB_USER: {db_user}")
+    logging.info(f"DB_PASSWORD: {'***' if db_password else None}")
+    logging.info(f"DB_HOST: {db_host}")
+    logging.info(f"DB_PORT: {db_port}")
+    logging.info(f"DB_NAME: {db_name}")
+    logging.info(f"Env file path: {dotenv_path}")
+    logging.info("==================================\n")
+    
+    # Check if all necessary environment variables are set
+    missing_vars = []
+    for var_name, var_value in [('DB_USER', db_user), ('DB_PASSWORD', db_password), 
+                                ('DB_HOST', db_host), ('DB_NAME', db_name)]:
+        if not var_value:
+            missing_vars.append(var_name)
+    
+    if missing_vars:
+        raise ValueError(f"Missing database connection details for: {', '.join(missing_vars)}. Please check your .env file.")
+    
+    # Construct the database URL
+    try:
+        db_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+        logging.info(f"Database URL: postgresql+psycopg2://{db_user}:***@{db_host}:{db_port}/{db_name}")
+    except Exception as e:
+        logging.error(f"Error constructing database URL: {e}")
+        raise
+    
+    # Create the engine
+    try:
+        engine = create_engine(db_url)
+        # Test the connection
+        with engine.connect() as conn:
+            logging.info("Successfully connected to the database.")
+    except Exception as e:
+        logging.error(f"Error connecting to the database: {e}")
+        raise
+    
     # Define data directories
     INTRADAY_DATA_DIR = os.path.join(project_root, 'data', 'raw', 'intraday')
     INDICATOR_DATA_DIR = os.path.join(project_root, 'data', 'raw', 'indicator')
@@ -31,42 +88,61 @@ def main():
         (OVERVIEW_DATA_DIR, 'overview_', '.json')
     ]:
         if os.path.exists(data_dir):
-            print(f"Processing directory: {data_dir} with prefix: {table_prefix}")
+            logging.info(f"Processing directory: {data_dir} with prefix: {table_prefix}")
             if file_extension == '.csv':
                 process_csv_directory(data_dir, table_prefix, engine)
             elif file_extension == '.json':
                 process_overview_directory(data_dir, table_prefix, engine)
         else:
-            print(f"Directory not found: {data_dir}")
+            logging.warning(f"Directory not found: {data_dir}")
 
     # Process sentiment data
     if os.path.exists(SENTIMENT_DATA_DIR):
-        print(f"Processing sentiment directory: {SENTIMENT_DATA_DIR}")
+        logging.info(f"Processing sentiment directory: {SENTIMENT_DATA_DIR}")
         process_sentiment_data(SENTIMENT_DATA_DIR, engine)
     else:
-        print(f"Sentiment data directory not found: {SENTIMENT_DATA_DIR}")
+        logging.warning(f"Sentiment data directory not found: {SENTIMENT_DATA_DIR}")
+
+    logging.info("Database builder completed successfully.")
 
 def convert_to_seconds(timestamp):
     """
     Converts various timestamp formats to Unix timestamp in seconds.
+    Floors the timestamp to the nearest hour.
     """
     if pd.isna(timestamp):
         return np.nan
+
+    # If timestamp is a string of digits, convert to int first
+    if isinstance(timestamp, str):
+        if timestamp.isdigit():
+            timestamp = int(timestamp)
+        else:
+            try:
+                ts = pd.Timestamp(timestamp)
+                return int(ts.timestamp())
+            except ValueError:
+                return np.nan
+
     if isinstance(timestamp, (int, float)):
         # Check if timestamp is in nanoseconds
-        if timestamp > 1e18:
-            return int(timestamp) // 1_000_000_000
+        if timestamp > 1e12:  # Unix time in nanoseconds
+            timestamp = int(timestamp) // 1_000_000_000  # Convert to seconds
         else:
-            return int(timestamp)
+            timestamp = int(timestamp)
+
     elif isinstance(timestamp, pd.Timestamp):
-        return int(timestamp.timestamp())
-    elif isinstance(timestamp, str):
-        try:
-            ts = pd.Timestamp(timestamp)
-            return int(ts.timestamp())
-        except ValueError:
-            return np.nan
+        timestamp = int(timestamp.timestamp())
+
     else:
+        return np.nan
+
+    # Floor the timestamp to the nearest hour
+    try:
+        dt = pd.to_datetime(timestamp, unit='s')
+        floored_dt = dt.floor('H')
+        return int(floored_dt.timestamp())
+    except Exception:
         return np.nan
 
 def process_csv_directory(data_dir, table_prefix, engine):
@@ -76,39 +152,39 @@ def process_csv_directory(data_dir, table_prefix, engine):
     """
     files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
     if not files:
-        print(f"No CSV files found in {data_dir}.")
+        logging.warning(f"No CSV files found in {data_dir}.")
         return
 
     for filename in files:
         file_path = os.path.join(data_dir, filename)
-        print(f"Processing file: {file_path}")
+        logging.info(f"Processing file: {file_path}")
 
         try:
             data = pd.read_csv(file_path)
-            print(f"Read {len(data)} records from {filename}.")
+            logging.info(f"Read {len(data)} records from {filename}.")
         except Exception as e:
-            print(f"Error reading {filename}: {e}")
+            logging.error(f"Error reading {filename}: {e}")
             continue
 
         # Identify date/time columns
         date_columns = [col for col in data.columns if 'date' in col.lower() or 'time' in col.lower()]
-        print(f"Identified date/time columns: {date_columns}")
+        logging.info(f"Identified date/time columns: {date_columns}")
 
         # Convert date/time columns to Unix timestamp in seconds
         for col in date_columns:
             data[col] = data[col].apply(convert_to_seconds)
-            print(f"Converted column '{col}' to Unix timestamp in seconds.")
+            logging.info(f"Converted column '{col}' to Unix timestamp in seconds.")
 
         # Define table name and convert to lowercase
         table_name = f"{table_prefix}{os.path.splitext(filename)[0]}".lower()
-        print(f"Table name set to: {table_name}")
+        logging.info(f"Table name set to: {table_name}")
 
         # Insert data into PostgreSQL
         try:
             data.to_sql(table_name, engine, if_exists='replace', index=False)
-            print(f"Data inserted into table: {table_name}")
+            logging.info(f"Data inserted into table: {table_name}")
         except Exception as e:
-            print(f"Error inserting data into table {table_name}: {e}")
+            logging.error(f"Error inserting data into table {table_name}: {e}")
             continue
 
         # Create hypertable in TimescaleDB
@@ -125,22 +201,22 @@ def process_csv_directory(data_dir, table_prefix, engine):
                         conn.execute(text(f'ALTER TABLE "{table_name}" RENAME COLUMN "{time_column}" TO timestamp'))
                         data.rename(columns={time_column: 'timestamp'}, inplace=True)
                         time_column = 'timestamp'
-                        print(f"Renamed column '{time_column}' to 'timestamp'.")
+                        logging.info(f"Renamed column '{time_column}' to 'timestamp'.")
 
                 # Verify the time_column data type
                 time_dtype = data['timestamp'].dtype
-                print(f"Data type of '{time_column}': {time_dtype}")
+                logging.info(f"Data type of '{time_column}': {time_dtype}")
 
                 # Create hypertable
                 hypertable_query = f"""
                 SELECT create_hypertable('{table_name}', '{time_column}', if_not_exists => TRUE, migrate_data => TRUE)
                 """
                 conn.execute(text(hypertable_query))
-                print(f"Hypertable created for table: {table_name}")
+                logging.info(f"Hypertable created for table: {table_name}")
             except (ProgrammingError, OperationalError, SQLAlchemyError) as e:
-                print(f"Hypertable creation error for table '{table_name}': {e}")
+                logging.error(f"Hypertable creation error for table '{table_name}': {e}")
             except Exception as e:
-                print(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
+                logging.error(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
 
 def process_overview_directory(data_dir, table_prefix, engine):
     """
@@ -150,20 +226,20 @@ def process_overview_directory(data_dir, table_prefix, engine):
     """
     files = [f for f in os.listdir(data_dir) if f.endswith('.json')]
     if not files:
-        print(f"No JSON files found in {data_dir}.")
+        logging.warning(f"No JSON files found in {data_dir}.")
         return
 
     overview_records = []
     for filename in files:
         file_path = os.path.join(data_dir, filename)
-        print(f"Processing overview file: {file_path}")
+        logging.info(f"Processing overview file: {file_path}")
 
         try:
             with open(file_path, 'r') as file:
                 data = json.load(file)
-                print(f"Loaded data from {filename}.")
+                logging.info(f"Loaded data from {filename}.")
         except Exception as e:
-            print(f"Error reading {filename}: {e}")
+            logging.error(f"Error reading {filename}: {e}")
             continue
 
         # Select only the fields needed for the PyCaret model
@@ -211,34 +287,46 @@ def process_overview_directory(data_dir, table_prefix, engine):
                 record[date_field] = np.nan
 
         overview_records.append(record)
-        print(f"Processed overview data for symbol: {record.get('Symbol')}")
 
     if not overview_records:
-        print("No overview data to insert.")
+        logging.warning(f"No valid records found in {data_dir}.")
         return
 
+    # Create DataFrame
     df = pd.DataFrame(overview_records)
-    print(f"Prepared overview DataFrame with {len(df)} records.")
+    logging.info(f"Created DataFrame with {len(df)} records from overview data.")
 
-    # Define table name
-    table_name = 'overview'.lower()
-    print(f"Table name set to: {table_name}")
+    # Define table name and convert to lowercase
+    table_name = f"{table_prefix}overview".lower()
+    logging.info(f"Table name set to: {table_name}")
 
-    # Insert overview data into PostgreSQL
+    # Insert data into PostgreSQL
     try:
         df.to_sql(table_name, engine, if_exists='replace', index=False)
-        print(f"Overview data inserted into table: {table_name}")
+        logging.info(f"Data inserted into table: {table_name}")
     except Exception as e:
-        print(f"Error inserting overview data into table {table_name}: {e}")
+        logging.error(f"Error inserting data into table {table_name}: {e}")
         return
 
-    # Create hypertable for overview data
+    # Create hypertable in TimescaleDB
     with engine.connect() as conn:
         try:
+            # Ensure 'timestamp' column exists
+            if 'timestamp' in df.columns:
+                time_column = 'timestamp'
+            else:
+                # Use the first date/time column found
+                time_column = date_fields[0]
+                # Rename the time column to 'timestamp' if it's different
+                if time_column != 'timestamp':
+                    conn.execute(text(f'ALTER TABLE "{table_name}" RENAME COLUMN "{time_column}" TO timestamp'))
+                    df.rename(columns={time_column: 'timestamp'}, inplace=True)
+                    time_column = 'timestamp'
+                    logging.info(f"Renamed column '{time_column}' to 'timestamp'.")
             # Ensure 'latestquarter' is used as the timestamp
             time_column = 'LatestQuarter' if 'LatestQuarter' in df.columns else None
             if time_column is None:
-                print("Column 'LatestQuarter' not found in overview data.")
+                logging.warning("Column 'LatestQuarter' not found in overview data.")
                 return
 
             # Rename the column to 'timestamp' if necessary
@@ -246,22 +334,22 @@ def process_overview_directory(data_dir, table_prefix, engine):
                 conn.execute(text(f'ALTER TABLE "{table_name}" RENAME COLUMN "{time_column}" TO timestamp'))
                 df.rename(columns={time_column: 'timestamp'}, inplace=True)
                 time_column = 'timestamp'
-                print(f"Renamed column '{time_column}' to 'timestamp'.")
+                logging.info(f"Renamed column '{time_column}' to 'timestamp'.")
 
             # Verify the time_column data type
             time_dtype = df['timestamp'].dtype
-            print(f"Data type of '{time_column}': {time_dtype}")
+            logging.info(f"Data type of '{time_column}': {time_dtype}")
 
             # Create hypertable
             hypertable_query = f"""
             SELECT create_hypertable('{table_name}', '{time_column}', if_not_exists => TRUE, migrate_data => TRUE)
             """
             conn.execute(text(hypertable_query))
-            print(f"Hypertable created for table: {table_name}")
+            logging.info(f"Hypertable created for table: {table_name}")
         except (ProgrammingError, OperationalError, SQLAlchemyError) as e:
-            print(f"Hypertable creation error for table '{table_name}': {e}")
+            logging.error(f"Hypertable creation error for table '{table_name}': {e}")
         except Exception as e:
-            print(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
+            logging.error(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
 
 def process_sentiment_data(sentiment_dir, engine):
     """
@@ -270,20 +358,20 @@ def process_sentiment_data(sentiment_dir, engine):
     """
     files = [f for f in os.listdir(sentiment_dir) if f.endswith('.json')]
     if not files:
-        print(f"No JSON files found in {sentiment_dir}.")
+        logging.warning(f"No JSON files found in {sentiment_dir}.")
         return
 
     sentiment_data = []
     for filename in files:
         file_path = os.path.join(sentiment_dir, filename)
-        print(f"Processing sentiment file: {file_path}")
+        logging.info(f"Processing sentiment file: {file_path}")
 
         try:
             with open(file_path, 'r') as file:
                 data = json.load(file)
-                print(f"Loaded data from {filename}.")
+                logging.info(f"Loaded data from {filename}.")
         except Exception as e:
-            print(f"Error reading {filename}: {e}")
+            logging.error(f"Error reading {filename}: {e}")
             continue
 
         for ticker, info in data.items():
@@ -298,27 +386,27 @@ def process_sentiment_data(sentiment_dir, engine):
                     'ticker': ticker.lower(),
                     'sentiment_score': info.get('overall_sentiment_score', np.nan)
                 })
-                print(f"Processed sentiment data for ticker: {ticker}")
+                logging.info(f"Processed sentiment data for ticker: {ticker}")
             except Exception as e:
-                print(f"Error processing ticker {ticker} in {filename}: {e}")
+                logging.error(f"Error processing ticker {ticker} in {filename}: {e}")
 
     if not sentiment_data:
-        print("No sentiment data to insert.")
+        logging.warning("No sentiment data to insert.")
         return
 
     df = pd.DataFrame(sentiment_data)
-    print(f"Prepared sentiment DataFrame with {len(df)} records.")
+    logging.info(f"Prepared sentiment DataFrame with {len(df)} records.")
 
     # Define table name
     table_name = 'sentiment'.lower()
-    print(f"Table name set to: {table_name}")
+    logging.info(f"Table name set to: {table_name}")
 
     # Insert sentiment data into PostgreSQL
     try:
         df.to_sql(table_name, engine, if_exists='replace', index=False)
-        print(f"Sentiment data inserted into table: {table_name}")
+        logging.info(f"Sentiment data inserted into table: {table_name}")
     except Exception as e:
-        print(f"Error inserting sentiment data into table {table_name}: {e}")
+        logging.error(f"Error inserting sentiment data into table {table_name}: {e}")
         return
 
     # Create hypertable for sentiment data
@@ -328,7 +416,7 @@ def process_sentiment_data(sentiment_dir, engine):
             # Here, we'll use 'timestamp_to'
             time_column = 'timestamp_to' if 'timestamp_to' in df.columns else 'timestamp_from'
             if time_column not in df.columns:
-                print(f"Neither 'timestamp_to' nor 'timestamp_from' found in sentiment data.")
+                logging.warning(f"Neither 'timestamp_to' nor 'timestamp_from' found in sentiment data.")
                 return
 
             # Rename the chosen timestamp column to 'timestamp' if necessary
@@ -336,22 +424,25 @@ def process_sentiment_data(sentiment_dir, engine):
                 conn.execute(text(f'ALTER TABLE "{table_name}" RENAME COLUMN "{time_column}" TO timestamp'))
                 df.rename(columns={time_column: 'timestamp'}, inplace=True)
                 time_column = 'timestamp'
-                print(f"Renamed column '{time_column}' to 'timestamp'.")
+                logging.info(f"Renamed column '{time_column}' to 'timestamp'.")
 
             # Verify the time_column data type
             time_dtype = df['timestamp'].dtype
-            print(f"Data type of '{time_column}': {time_dtype}")
+            logging.info(f"Data type of '{time_column}': {time_dtype}")
 
             # Create hypertable
             hypertable_query = f"""
             SELECT create_hypertable('{table_name}', '{time_column}', if_not_exists => TRUE, migrate_data => TRUE)
             """
             conn.execute(text(hypertable_query))
-            print(f"Hypertable created for table: {table_name}")
+            logging.info(f"Hypertable created for table: {table_name}")
         except (ProgrammingError, OperationalError, SQLAlchemyError) as e:
-            print(f"Hypertable creation error for table '{table_name}': {e}")
+            logging.error(f"Hypertable creation error for table '{table_name}': {e}")
         except Exception as e:
-            print(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
+            logging.error(f"Unexpected error during hypertable creation for table '{table_name}': {e}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
