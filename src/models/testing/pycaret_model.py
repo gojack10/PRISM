@@ -24,19 +24,22 @@ def run_pycaret_model_for_ticker(ticker, data):
             fold=3,
             numeric_imputation_target='mean',
             numeric_imputation_exogenous='mean',
-            ignore_features=[
-                'key_topics', 'sentiment_change', 'financial_metrics',
-                'short_term_outlook', 'long_term_outlook', 'ticker'
-            ],
-            n_jobs=-1,      # Utilize all CPU cores for parallel processing
-            use_gpu=True,   # If GPU is available
+            ignore_features=['ticker'],
             verbose=True
         )
+        
         logging.info(f"Setup completed in {time.time() - setup_start:.2f} seconds for ticker {ticker}")
 
+        # Log selected features
+        processed_data = get_config('X')
+        logging.info(f"Features used for modeling: {processed_data.columns.tolist()}")
+        
         logging.info("\nComparing models...")
         compare_start = time.time()
-        best_model = compare_models(turbo=True, verbose=False)
+        
+        # Update the estimator name here
+        best_model = compare_models(turbo=True, verbose=True, include=['lightgbm_cds_dt'])
+        
         logging.info(f"Model comparison completed in {time.time() - compare_start:.2f} seconds for ticker {ticker}")
 
         if best_model is None:
@@ -45,6 +48,7 @@ def run_pycaret_model_for_ticker(ticker, data):
 
         logging.info(f"Best model for {ticker}: {best_model}")
 
+        # Proceed with tuning, finalizing, predicting, etc.
         logging.info("\nTuning the best model...")
         tune_start = time.time()
         tuned_model = tune_model(best_model)
@@ -88,7 +92,7 @@ def run_pycaret_models():
 
         logging.info("Preprocessing data...")
 
-        # parse 'date' column assuming it's in Unix timestamp (seconds)
+        # Parse 'date' column assuming it's in Unix timestamp (seconds)
         combined_data['date'] = pd.to_datetime(combined_data['date'], unit='s')
         logging.info("Converted 'date' column to datetime.")
 
