@@ -150,7 +150,6 @@ def process_ticker(ticker):
             logging.info(f"Rows retrieved for ticker {ticker}: {len(df)}")
 
         df.rename(columns={'timestamp': 'date'}, inplace=True)
-        df.set_index('date', inplace=True)
 
         # add the ticker column
         df['ticker'] = ticker 
