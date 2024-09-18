@@ -16,64 +16,105 @@ def run_pycaret_model_for_ticker(ticker, data):
         logging.info(f"Initializing PyCaret setup for ticker: {ticker}")
         setup_start = time.time()
         
+        # Drop the 'ticker' column
+        if 'ticker' in data.columns:
+            data = data.drop('ticker', axis=1)
+            logging.info(f"Dropped 'ticker' column for ticker {ticker}")
+        
+        # Ensure 'date' is set as the DataFrame's index
+        if 'date' in data.columns:
+            data = data.set_index('date')
+            logging.info(f"Set 'date' as the index for ticker {ticker}")
+        
+        # Convert index to datetime if not already
+        if not pd.api.types.is_datetime64_any_dtype(data.index):
+            data.index = pd.to_datetime(data.index)
+            logging.info(f"Converted index to datetime for ticker {ticker}")
+        
+        # Sort data by index
+        data = data.sort_index()
+        logging.info(f"Data for ticker {ticker} sorted by index.")
+        
+        # Handle missing values
+        missing_threshold = 0.5  # Threshold for dropping features with more than 50% missing values
+        data = data.loc[:, data.isnull().mean() < missing_threshold]
+        logging.info(f"Dropped features with more than {missing_threshold*100}% missing values.")
+
+        # Impute remaining missing values
+        data = data.fillna(method='ffill').fillna(method='bfill')
+        logging.info("Imputed missing values using forward and backward fill.")
+        
+        # Remove constant columns (zero variance)
+        from sklearn.feature_selection import VarianceThreshold
+        selector = VarianceThreshold(threshold=0)
+        selector.fit(data)
+        data = data[data.columns[selector.get_support(indices=True)]]
+        logging.info("Removed constant features with zero variance.")
+        
+        # Check if there are any features left
+        if data.shape[1] <= 1:
+            logging.error(f"No features left after preprocessing for ticker {ticker}.")
+            return
+        
+        # Initialize PyCaret setup
         s = setup(
             data=data,
             target='4. close',
             fh=10,
             session_id=42,
             fold=3,
-            numeric_imputation_target='mean',
-            numeric_imputation_exogenous='mean',
-            ignore_features=[
-                'key_topics', 'sentiment_change', 'financial_metrics',
-                'short_term_outlook', 'long_term_outlook', 'ticker'
-            ],
+            numeric_imputation_target='mean',        # Additional imputation in setup
+            numeric_imputation_exogenous='mean',     # Additional imputation in setup
+            enforce_exogenous=False,                 # If there are no exogenous variables left
             n_jobs=-1,      # Utilize all CPU cores for parallel processing
             use_gpu=True,   
             verbose=True
         )
         logging.info(f"Setup completed in {time.time() - setup_start:.2f} seconds for ticker {ticker}")
-
+        
         # Log selected features
         processed_data = get_config('X')
         logging.info(f"Features used for modeling: {processed_data.columns.tolist()}")
-       
+        
+        if processed_data.empty:
+            logging.error(f"No features available after setup for ticker {ticker}.")
+            return
 
         logging.info("\nComparing models...")
         compare_start = time.time()
         best_model = compare_models(turbo=True, verbose=False)
         logging.info(f"Model comparison completed in {time.time() - compare_start:.2f} seconds for ticker {ticker}")
-
+        
         if best_model is None:
             logging.error(f"No valid model found during comparison for ticker {ticker}.")
             return
-
+        
         logging.info(f"Best model for {ticker}: {best_model}")
-
+        
         logging.info("\nTuning the best model...")
         tune_start = time.time()
         tuned_model = tune_model(best_model)
         logging.info(f"Model tuning completed in {time.time() - tune_start:.2f} seconds for ticker {ticker}")
-
+        
         logging.info("\nFinalizing the model...")
         final_model = finalize_model(tuned_model)
-
+        
         logging.info("\nMaking future predictions...")
         future_predictions = predict_model(final_model, fh=10)
         logging.info("Future predictions:")
         logging.info(f"\n{future_predictions}")
-
+        
         logging.info("\nSaving the model...")
         model_filename = f'pycaret_ts_model_{ticker}'
         save_model(final_model, model_filename)
         logging.info(f"Model saved as '{model_filename}'")
-
+        
         # Generate plots for the final model only
         logging.info("\nGenerating model plots...")
         plot_model(final_model, plot='forecast')
         plot_model(final_model, plot='decomp_stl')
         logging.info("Plots generated. Check your working directory for saved images.")
-
+    
     except Exception as e:
         logging.error(f"An error occurred for ticker {ticker}: {str(e)}")
         import traceback

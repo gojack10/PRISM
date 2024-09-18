@@ -381,8 +381,7 @@ def process_sentiment_data(sentiment_dir, engine):
                 date_to_s = convert_to_seconds(info.get('date_to', np.nan))
 
                 sentiment_data.append({
-                    'timestamp_from': date_from_s,
-                    'timestamp_to': date_to_s,
+                    'timestamp': date_to_s,
                     'ticker': ticker.lower(),
                     'sentiment_score': info.get('overall_sentiment_score', np.nan)
                 })
@@ -412,19 +411,11 @@ def process_sentiment_data(sentiment_dir, engine):
     # Create hypertable for sentiment data
     with engine.connect() as conn:
         try:
-            # Decide which timestamp to use for hypertable
-            # Here, we'll use 'timestamp_to'
-            time_column = 'timestamp_to' if 'timestamp_to' in df.columns else 'timestamp_from'
+            # Use 'timestamp' column for hypertable
+            time_column = 'timestamp'
             if time_column not in df.columns:
-                logging.warning(f"Neither 'timestamp_to' nor 'timestamp_from' found in sentiment data.")
+                logging.warning(f"'timestamp' column not found in sentiment data.")
                 return
-
-            # Rename the chosen timestamp column to 'timestamp' if necessary
-            if time_column != 'timestamp':
-                conn.execute(text(f'ALTER TABLE "{table_name}" RENAME COLUMN "{time_column}" TO timestamp'))
-                df.rename(columns={time_column: 'timestamp'}, inplace=True)
-                time_column = 'timestamp'
-                logging.info(f"Renamed column '{time_column}' to 'timestamp'.")
 
             # Verify the time_column data type
             time_dtype = df['timestamp'].dtype
