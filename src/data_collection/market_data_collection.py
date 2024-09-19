@@ -39,6 +39,9 @@ os.makedirs(INTRADAY_DATA_DIR, exist_ok=True)
 os.makedirs(INDICATOR_DATA_DIR, exist_ok=True)
 os.makedirs(OVERVIEW_DATA_DIR, exist_ok=True)
 
+# Define the interval
+INTERVAL = '60min'
+
 # Set up logging to print to console
 logging.basicConfig(
     level=logging.INFO,
@@ -96,7 +99,7 @@ def collect_intraday_data(symbol):
             params = {
                 'function': 'TIME_SERIES_INTRADAY',
                 'symbol': symbol,
-                'interval': '60min',
+                'interval': INTERVAL,
                 'month': month,
                 'outputsize': 'full',
                 'adjusted': 'true',  # Adjusted data
@@ -107,7 +110,7 @@ def collect_intraday_data(symbol):
                 data = response.json()
                 
                 # Check if 'Time Series (60min)' is in the response
-                time_series_key = 'Time Series (60min)'
+                time_series_key = f'Time Series ({INTERVAL})'
                 if time_series_key in data:
                     time_series_data = data[time_series_key]
                     df = pd.DataFrame.from_dict(time_series_data, orient='index')
@@ -177,38 +180,38 @@ def collect_indicator_data(symbol):
     indicators = [
         {
             'function': 'RSI',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'time_period': '10',
             'series_type': 'open',
             'suffix': 'RSI',
         },
         {
             'function': 'MACD',
-            'interval': 'daily',
+            'interval': INTERVAL,
             'series_type': 'open',
             'suffix': 'MACD',
         },
         {
             'function': 'ROC',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'time_period': '10',
             'series_type': 'close',
             'suffix': 'ROC',
         },
         {
             'function': 'OBV',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'suffix': 'OBV',
         },
         {
             'function': 'ATR',
-            'interval': 'daily',
+            'interval': INTERVAL,
             'time_period': '14',
             'suffix': 'ATR',
         },
         {
             'function': 'BBANDS',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'time_period': '5',
             'series_type': 'close',
             'nbdevup': '3',
@@ -218,14 +221,14 @@ def collect_indicator_data(symbol):
         },
         {
             'function': 'SMA',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'time_period': '10',
             'series_type': 'open',
             'suffix': 'SMA',
         },
         {
             'function': 'EMA',
-            'interval': 'weekly',
+            'interval': INTERVAL,
             'time_period': '10',
             'series_type': 'open',
             'suffix': 'EMA',
@@ -244,7 +247,7 @@ def collect_indicator_data(symbol):
             params = {
                 'function': indicator['function'],
                 'symbol': symbol,
-                'interval': indicator.get('interval', 'daily'),
+                'interval': indicator['interval'],
                 'apikey': ALPHA_VANTAGE_API_KEY,
             }
             # Add optional parameters
