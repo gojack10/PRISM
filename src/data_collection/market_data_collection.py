@@ -1,15 +1,14 @@
 import os
 import sys
-import time
-import json
 import yaml
 import logging
 import requests
-import pandas as pd
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from pathlib import Path
+import datetime
+import time
+import json
+import csv
 from io import StringIO
+from dotenv import load_dotenv
 
 # Load environment variables
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +17,7 @@ dotenv_path = os.path.join(project_root, 'config', '.env')
 load_dotenv(dotenv_path)
 
 ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
-ALPHA_VANTAGE_BASE_URL = os.getenv('ALPHA_VANTAGE_BASE_URL')
+ALPHA_VANTAGE_BASE_URL = 'https://www.alphavantage.co/query'
 
 # Load config
 config_path = os.path.join(project_root, 'config', 'config.yaml')
@@ -30,16 +29,7 @@ with open(config_path, 'r') as config_file:
     config = yaml.safe_load(config_file)
 
 TICKERS = config.get('tickers', [])
-INTRADAY_DATA_DIR = os.path.join(project_root, 'data', 'raw', 'intraday')
-INDICATOR_DATA_DIR = os.path.join(project_root, 'data', 'raw', 'indicator')
-OVERVIEW_DATA_DIR = os.path.join(project_root, 'data', 'raw', 'overview')
 
-# Ensure data directories exist
-os.makedirs(INTRADAY_DATA_DIR, exist_ok=True)
-os.makedirs(INDICATOR_DATA_DIR, exist_ok=True)
-os.makedirs(OVERVIEW_DATA_DIR, exist_ok=True)
-
-# Define the interval
 INTERVAL = '60min'
 
 # Set up logging to print to console
@@ -48,257 +38,165 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
 )
 
-def save_data(data, data_dir, filename):
-    """
-    Saves data to the specified directory with the given filename.
-    Handles both DataFrame and dictionary data types.
-    """
-    os.makedirs(data_dir, exist_ok=True)
-    file_path = os.path.join(data_dir, filename)
-    try:
-        if isinstance(data, pd.DataFrame):
-            data.to_csv(file_path, index=False)
-        elif isinstance(data, dict):
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=4)
-        else:
-            logging.error(f"Unsupported data type for saving: {type(data)}")
-            return
-        logging.info(f"Data saved to {file_path}")
-    except Exception as e:
-        logging.error(f"Failed to save data to {file_path}: {e}")
+# Function to check if the market is open
+def is_market_open():
+    url = f"{ALPHA_VANTAGE_BASE_URL}?function=MARKET_STATUS&apikey={ALPHA_VANTAGE_API_KEY}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        for market in data.get('markets', []):
+            if market['market_type'] == 'Equity' and market['region'] == 'United States':
+                return market['current_status'] == 'open'
+    return False
 
-def collect_intraday_data(symbol):
-    filename = f"{symbol}_intraday.csv"
-    file_path = os.path.join(INTRADAY_DATA_DIR, filename)
-    if os.path.exists(file_path):
-        logging.info(f"Intraday data for {symbol} already exists. Skipping data collection.")
-        return
+# Check if the market is open
+if is_market_open():
+    print("Error: Market is currently open. This script should only run when the market is closed.")
+    sys.exit(1)
 
-    logging.info(f'Collecting intraday data for {symbol}')
-    all_data = []
-    
-    # Start and end dates for the last 5 years
-    end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=5*365)
-    
-    # Generate a list of months between start_date and end_date
-    month_list = []
-    current_date = start_date.replace(day=1)
-    while current_date <= end_date:
-        month_list.append(current_date.strftime('%Y-%m'))
-        # Move to the next month
-        if current_date.month == 12:
-            current_date = current_date.replace(year=current_date.year + 1, month=1)
-        else:
-            current_date = current_date.replace(month=current_date.month + 1)
-    
-    for month in month_list:
-        logging.info(f'Fetching data for {symbol} for {month}')
-        try:
-            params = {
-                'function': 'TIME_SERIES_INTRADAY',
-                'symbol': symbol,
-                'interval': INTERVAL,
-                'month': month,
-                'outputsize': 'full',
-                'adjusted': 'true',  # Adjusted data
-                'apikey': ALPHA_VANTAGE_API_KEY,
-            }
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Check if 'Time Series (60min)' is in the response
-                time_series_key = f'Time Series ({INTERVAL})'
-                if time_series_key in data:
-                    time_series_data = data[time_series_key]
-                    df = pd.DataFrame.from_dict(time_series_data, orient='index')
-                    df.reset_index(inplace=True)
-                    df.rename(columns={'index': 'timestamp'}, inplace=True)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    # Convert columns to numeric
-                    df = df.apply(pd.to_numeric, errors='ignore')
-                    all_data.append(df)
-                    logging.info(f'Collected intraday data for {symbol} for {month}')
-                else:
-                    logging.warning(f"No intraday data found for {symbol} for {month}")
-                    logging.warning(f"Response message: {data.get('Note') or data.get('Error Message')}")
-            else:
-                logging.error(f'Error fetching intraday data: {response.status_code} {response.text}')
-            # Respect API rate limits
-            time.sleep(0.8)
-        except Exception as e:
-            logging.error(f'Exception occurred while fetching intraday data for {symbol} for {month}: {e}')
-            # Wait longer before retrying in case of an error
-            time.sleep(5)
-    
-    if all_data:
-        combined_data = pd.concat(all_data, ignore_index=True)
-        # Sort data by timestamp
-        combined_data.sort_values('timestamp', inplace=True)
-        # Reset index after sorting
-        combined_data.reset_index(drop=True, inplace=True)
-        save_data(combined_data, INTRADAY_DATA_DIR, filename)
+# Create output directory with timestamp
+run_timestamp = datetime.datetime.now().strftime('RUN %Y-%m-%d %H-%M-%S')
+output_dir = os.path.join(project_root, 'data', 'raw', run_timestamp)
+os.makedirs(output_dir, exist_ok=True)
+
+# Initialize a counter for API calls
+api_call_count = 0
+start_time = time.time()
+
+def fetch_data(symbol, function, params):
+    global api_call_count
+    api_call_count += 1
+
+    # Implement rate limiting for premium API (75 calls per minute)
+    if api_call_count % 75 == 0:
+        elapsed_time = time.time() - start_time
+        if elapsed_time < 60:
+            time.sleep(60 - elapsed_time)
+        start_time = time.time()
+
+    url = f"{ALPHA_VANTAGE_BASE_URL}?function={function}&symbol={symbol}&apikey={ALPHA_VANTAGE_API_KEY}"
+    for key, value in params.items():
+        url += f"&{key}={value}"
+
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
     else:
-        logging.info(f'No intraday data collected for {symbol}')
+        logging.error(f"Error fetching data for {symbol}, function {function}: {response.status_code}")
+        return None
 
-def collect_overview_data(symbol):
-    filename = f"{symbol}_overview.json"
-    file_path = os.path.join(OVERVIEW_DATA_DIR, filename)
-    if os.path.exists(file_path):
-        logging.info(f"Overview data for {symbol} already exists. Skipping data collection.")
-        return
+def save_csv_data(data, filename):
+    file_path = os.path.join(output_dir, f"{filename}.csv")
+    with open(file_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerows(data)
+    logging.info(f"Saved CSV data to {file_path}")
 
-    logging.info(f'Collecting overview data for {symbol}')
+def fetch_news_sentiment(ticker, params):
+    """
+    Fetch news sentiment data for a given ticker.
+    """
+    base_url = "https://api.yournewsapi.com/v1/"
+    params['function'] = 'NEWS_SENTIMENT'
+    params['tickers'] = ticker
+
     try:
-        params = {
-            'function': 'OVERVIEW',
-            'symbol': symbol,
-            'apikey': ALPHA_VANTAGE_API_KEY,
-        }
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data:
-                save_data(data, OVERVIEW_DATA_DIR, filename)
-                logging.info(f'Collected overview data for {symbol}')
-            else:
-                logging.warning(f'No overview data found for {symbol}')
-            time.sleep(0.8)  # Respect API rate limits
-        else:
-            logging.error(f'Error fetching overview data for {symbol}: {response.status_code} {response.text}')
-            time.sleep(5)
-    except Exception as e:
-        logging.error(f'Exception occurred while fetching overview for {symbol}: {e}')
-        time.sleep(5)
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return data.get('feed', [])
+    except requests.exceptions.HTTPError as http_err:
+        logging.error(f"HTTP error occurred: {http_err} - Response: {response.text}")
+    except Exception as err:
+        logging.error(f"Other error occurred: {err}")
+    return []
 
-def collect_indicator_data(symbol):
-    logging.info(f'Collecting technical indicators for {symbol}')
-    
-    # Define the indicators to collect and their parameters
-    indicators = [
-        {
-            'function': 'RSI',
-            'interval': INTERVAL,
-            'time_period': '10',
-            'series_type': 'open',
-            'suffix': 'RSI',
-        },
-        {
-            'function': 'MACD',
-            'interval': INTERVAL,
-            'series_type': 'open',
-            'suffix': 'MACD',
-        },
-        {
-            'function': 'ROC',
-            'interval': INTERVAL,
-            'time_period': '10',
-            'series_type': 'close',
-            'suffix': 'ROC',
-        },
-        {
-            'function': 'OBV',
-            'interval': INTERVAL,
-            'suffix': 'OBV',
-        },
-        {
-            'function': 'ATR',
-            'interval': INTERVAL,
-            'time_period': '14',
-            'suffix': 'ATR',
-        },
-        {
-            'function': 'BBANDS',
-            'interval': INTERVAL,
-            'time_period': '5',
-            'series_type': 'close',
-            'nbdevup': '3',
-            'nbdevdn': '3',
-            'matype': '0',
-            'suffix': 'BBANDS',
-        },
-        {
-            'function': 'SMA',
-            'interval': INTERVAL,
-            'time_period': '10',
-            'series_type': 'open',
-            'suffix': 'SMA',
-        },
-        {
-            'function': 'EMA',
-            'interval': INTERVAL,
-            'time_period': '10',
-            'series_type': 'open',
-            'suffix': 'EMA',
-        },
-    ]
+five_years_ago = (datetime.datetime.now() - datetime.timedelta(days=5*365)).strftime('%Y-%m')
 
-    for indicator in indicators:
-        filename = f"{symbol}_{indicator['suffix']}_indicator.csv"
-        file_path = os.path.join(INDICATOR_DATA_DIR, filename)
-        if os.path.exists(file_path):
-            logging.info(f"{indicator['function']} data for {symbol} already exists. Skipping data collection.")
-            continue
+for ticker in TICKERS:
+    logging.info(f"Fetching data for {ticker}")
 
-        logging.info(f"Collecting {indicator['function']} data for {symbol}")
+    # Fetch intraday data (hourly for the last 5 years)
+    intraday_data = fetch_data(ticker, 'TIME_SERIES_INTRADAY', {
+        'interval': '60min',
+        'outputsize': 'full',
+        'adjusted': 'true',
+        'extended_hours': 'true',
+        'month': five_years_ago
+    })
+    if intraday_data:
+        time_series_data = intraday_data.get('Time Series (60min)', {})
+        csv_data = [['ticker', 'timestamp', '1. open', '2. high', '3. low', '4. close', '5. volume']]
+        csv_data.extend([ticker, k] + list(v.values()) for k, v in time_series_data.items())
+        save_csv_data(csv_data, 'intraday_price_volume_data')
+
+    # Fetch earnings data
+    earnings_data = fetch_data(ticker, 'EARNINGS', {})
+    if earnings_data:
+        quarterly_earnings = earnings_data.get('quarterlyEarnings', [])
+        csv_data = [['ticker'] + list(quarterly_earnings[0].keys())]
+        csv_data.extend([ticker] + list(d.values()) for d in quarterly_earnings)
+        save_csv_data(csv_data, 'quarterly_earnings_data')
+
+    # Fetch income statement data
+    income_statement_data = fetch_data(ticker, 'INCOME_STATEMENT', {})
+    if income_statement_data:
+        annual_reports = income_statement_data.get('annualReports', [])
+        csv_data = [['ticker'] + list(annual_reports[0].keys())]
+        csv_data.extend([ticker] + list(d.values()) for d in annual_reports)
+        save_csv_data(csv_data, 'annual_income_statement_data')
+
+    # Fetch news sentiment data for the last 5 years
+    params = {
+        'topics': 'technology,earnings,economy_macro,economy_monetary,economy_fiscal,financial_markets',
+        'time_from': five_years_ago,
+        'sort': 'LATEST'
+    }
+    logging.info(f"Fetching news sentiment data for {ticker}")
+    feed = fetch_news_sentiment(ticker, params)
+
+    if feed:
         try:
-            params = {
-                'function': indicator['function'],
-                'symbol': symbol,
-                'interval': indicator['interval'],
-                'apikey': ALPHA_VANTAGE_API_KEY,
-            }
-            # Add optional parameters
-            for key in ['time_period', 'series_type', 'fastperiod', 'slowperiod', 'signalperiod', 'nbdevup', 'nbdevdn', 'matype']:
-                if key in indicator:
-                    params[key] = indicator[key]
-
-            response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
-            if response.status_code == 200:
-                data = response.json()
-                # Determine the key for the technical analysis data
-                ta_key = None
-                for key in data.keys():
-                    if key.startswith('Technical Analysis:'):
-                        ta_key = key
-                        break
-                if ta_key:
-                    technical_data = data[ta_key]
-                    df = pd.DataFrame.from_dict(technical_data, orient='index')
-                    df.reset_index(inplace=True)
-                    df.rename(columns={'index': 'timestamp'}, inplace=True)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    # Convert data types
-                    df = df.apply(pd.to_numeric, errors='ignore')
-                    # Sort data by timestamp
-                    df.sort_values('timestamp', inplace=True)
-                    # Save data
-                    save_data(df, INDICATOR_DATA_DIR, filename)
-                    logging.info(f"Collected {indicator['function']} data for {symbol}")
-                else:
-                    logging.warning(f"No technical data found for {symbol} for indicator {indicator['function']}")
-                    logging.warning(f"Response message: {data.get('Note') or data.get('Error Message')}")
-            else:
-                logging.error(f"Error fetching {indicator['function']} data for {symbol}: {response.status_code} {response.text}")
-            # Respect API rate limits
-            time.sleep(0.8)
+            headers = list(feed[0].keys())
+            rows = [list(d.values()) for d in feed]
+            save_csv_data([headers] + rows, 'news_sentiment_data')
         except Exception as e:
-            logging.error(f"Exception occurred while fetching {indicator['function']} data for {symbol}: {e}")
-            # Wait longer before retrying in case of an error
-            time.sleep(5)
+            logging.error(f"Error processing feed data for {ticker}: {e}")
+    else:
+        logging.warning(f"No news sentiment data available for {ticker}")
 
-def main():
-    """
-    Main function to orchestrate data collection for all symbols.
-    """
-    for symbol in TICKERS:
-        logging.info(f'Starting data collection for {symbol}')
-        collect_intraday_data(symbol)
-        collect_overview_data(symbol)
-        collect_indicator_data(symbol)
-    logging.info('Data collection completed.')
+    # Fetch technical indicators (hourly data for the last 5 years)
+    technical_indicators = {
+        'RSI': {'interval': '60min', 'time_period': 14, 'series_type': 'close'},
+        'MACD': {'interval': '60min', 'series_type': 'close'},
+        'ATR': {'interval': '60min', 'time_period': 14},
+        'BBANDS': {'interval': '60min', 'time_period': 20, 'series_type': 'close'},
+        'VWAP': {'interval': '60min'},
+    }
 
-if __name__ == '__main__':
-    main()
+    for indicator, params in technical_indicators.items():
+        params['outputsize'] = 'full'
+        params['month'] = five_years_ago
+        data = fetch_data(ticker, indicator, params)
+        if data:
+            technical_data = data.get(f'Technical Analysis: {indicator}', {})
+            csv_data = [['ticker', 'timestamp'] + list(next(iter(technical_data.values())).keys())]
+            csv_data.extend([ticker, k] + list(v.values()) for k, v in technical_data.items())
+            save_csv_data(csv_data, f'hourly_{indicator.lower()}_data')
+
+# Fetch economic indicators
+economic_indicators = {
+    'FEDERAL_FUNDS_RATE': {'interval': 'monthly'},
+    'CPI': {'interval': 'monthly'},
+    'UNEMPLOYMENT': {}
+}
+
+for indicator, params in economic_indicators.items():
+    data = fetch_data('', indicator, params)
+    if data:
+        economic_data = data.get('data', [])
+        csv_data = [['ticker', 'date', 'value']]
+        csv_data.extend(['ECONOMIC'] + list(d.values()) for d in economic_data)
+        save_csv_data(csv_data, f'monthly_{indicator.lower()}_data')
+
+logging.info("Data collection completed.")
