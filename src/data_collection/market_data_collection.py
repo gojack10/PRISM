@@ -112,59 +112,6 @@ def save_json_data(data, filename):
     except Exception as e:
         logging.error(f"Failed to save JSON data to {file_path}: {e}")
 
-def fetch_news_sentiment(ticker):
-    """
-    Fetch news sentiment data for a given ticker.
-    """
-    global api_call_count, start_time
-    api_call_count += 1
-
-    # Implement rate limiting for premium API (75 calls per minute)
-    if api_call_count % 75 == 0:
-        elapsed_time = time.time() - start_time
-        if elapsed_time < 60:
-            sleep_time = 60 - elapsed_time
-            logging.info(f"Rate limit reached. Sleeping for {sleep_time:.2f} seconds.")
-            time.sleep(sleep_time)
-        start_time = time.time()
-
-    params = {
-        'function': 'NEWS_SENTIMENT',
-        'apikey': ALPHA_VANTAGE_API_KEY,
-        'tickers': ticker,
-        'sort': 'LATEST',
-        # You can set 'limit' if desired, default is 50
-        # 'limit': 100
-    }
-
-    logging.info(f"Fetching news sentiment for {ticker} with params: {params}")
-    
-    try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
-        logging.info(f"Received response for {ticker}: {data.keys()}")
-        
-        # Log any notes or error messages from API response
-        if 'Note' in data:
-            logging.error(f"API Note: {data['Note']}")
-        if 'Error Message' in data:
-            logging.error(f"API Error: {data['Error Message']}")
-        
-        feed = data.get('feed', [])
-        if not feed:
-            logging.warning(f"No news sentiment data returned for {ticker}.")
-        return feed
-    except requests.exceptions.HTTPError as http_err:
-        logging.error(f"HTTP error occurred: {http_err} - Response: {response.text}")
-    except requests.exceptions.RequestException as req_err:
-        logging.error(f"Request error occurred: {req_err}")
-    except json.JSONDecodeError as json_err:
-        logging.error(f"JSON decode error: {json_err} - Response content: {response.text[:200]}")
-    except Exception as err:
-        logging.error(f"Other error occurred: {err}")
-    return []
-
 five_years_ago_date = datetime.datetime.now() - datetime.timedelta(days=5*365)
 
 # Function to iterate over each month for intraday data
@@ -227,18 +174,6 @@ for ticker in TICKERS:
             logging.warning(f"No annual income statement data found for {ticker}")
     else:
         logging.warning(f"Failed to fetch income statement data for {ticker}")
-
-    logging.info(f"Fetching news sentiment data for {ticker}")
-    sentiment_data = fetch_news_sentiment(ticker)
-
-    if sentiment_data:
-        try:
-            save_json_data({'feed': sentiment_data}, f'news_sentiment_data_{ticker}')
-            logging.info(f"Successfully saved sentiment data for {ticker}")
-        except Exception as e:
-            logging.error(f"Error saving sentiment data for {ticker}: {e}")
-    else:
-        logging.warning(f"No news sentiment data available for {ticker}")
 
     # Fetch technical indicators (hourly data for the last 5 years)
     technical_indicators = {
