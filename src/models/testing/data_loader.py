@@ -265,10 +265,10 @@ def fetch_and_process_data(engine):
     table_frequencies = {
         'combined_intraday_data': 'intraday',
         'hourly_atr_data': 'hourly',
-        'hourly_bbands_data': 'hourly',  # Assuming 'hourly_bbands_data' is hourly
-        'hourly_macd_data': 'hourly',    # Assuming 'hourly_macd_data' is hourly
-        'hourly_rsi_data': 'hourly',     # Assuming 'hourly_rsi_data' is hourly
-        'hourly_vwap_data': 'hourly',    # Assuming 'hourly_vwap_data' is hourly
+        'hourly_bbands_data': 'hourly',  
+        'hourly_macd_data': 'hourly',    
+        'hourly_rsi_data': 'hourly',     
+        'hourly_vwap_data': 'hourly',    
         'monthly_cpi_data': 'monthly',
         'monthly_federal_funds_rate_data': 'monthly',
         'monthly_unemployment_data': 'monthly',
