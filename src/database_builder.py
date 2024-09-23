@@ -73,9 +73,8 @@ def get_session(engine):
 def main():
     # Calculate current directory and project root
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    dotenv_path = os.path.join(project_root, 'config', '.env')
-    # Load environment variables
+    project_root = os.path.dirname(current_dir) 
+    dotenv_path = os.path.join(project_root, 'config', '.env')  
     load_environment_variables(dotenv_path)
     engine = create_db_engine()
 
