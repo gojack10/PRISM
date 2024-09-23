@@ -75,6 +75,252 @@ def fetch_data(table_name, engine):
         logging.error(f"Error fetching data from {table_name}: {e}")
         return None
 
+def rename_columns(df):
+    """
+    Remove numerical prefixes from column names.
+    E.g., '4. close' becomes 'close'.
+    """
+    original_columns = df.columns.tolist()
+    df.rename(columns=lambda x: x.split('. ', 1)[1] if '. ' in x else x, inplace=True)
+    new_columns = df.columns.tolist()
+    logging.info(f"Renamed columns from {original_columns} to {new_columns}")
+    return df
+
+def parse_timestamp(ts):
+    """
+    Attempts to parse a timestamp string into a pandas Timestamp object.
+    Supports multiple datetime formats:
+    - "%Y-%m-%d %H:%M:%S"
+    - "%Y-%m-%d %H:%M"
+    - "%Y-%m-%d"
+
+    Parameters:
+        ts (str): The timestamp string to parse.
+
+    Returns:
+        pd.Timestamp or pd.NaT: The parsed Timestamp or Not-a-Time if parsing fails.
+    """
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return pd.to_datetime(ts, format=fmt)
+        except ValueError:
+            continue
+    # Attempt to parse without specifying format
+    try:
+        return pd.to_datetime(ts)
+    except ValueError:
+        return pd.NaT
+
+def process_intraday_data(df):
+    """
+    Preprocess intraday data:
+    - Rename columns
+    - Parse timestamps
+    - Handle missing data
+    - Ensure consistent frequency
+    """
+    logging.info("Processing intraday data.")
+    df = rename_columns(df)
+
+    # Parse timestamps
+    df['timestamp'] = df['timestamp'].apply(parse_timestamp)
+    unparsed = df['timestamp'].isnull().sum()
+    if unparsed > 0:
+        logging.warning(f"{unparsed} timestamps couldn't be parsed and are set to NaT.")
+
+    # Remove rows with unparseable dates
+    df = df.dropna(subset=['timestamp'])
+    if df.empty:
+        logging.error("All intraday timestamps are invalid after parsing.")
+        return None
+
+    # Sort data by timestamp
+    df = df.sort_values('timestamp')
+
+    # Set timestamp as index
+    df = df.set_index('timestamp')
+
+    # Ensure there is a 'close' column
+    if 'close' not in df.columns:
+        logging.error("The 'close' column is missing from the intraday data.")
+        return None
+
+    # Handle missing timestamps by setting consistent frequency (Assuming hourly frequency 'H')
+    df = df.asfreq('H')
+
+    # Forward fill missing values
+    df = df.fillna(method='ffill')
+
+    logging.info("Intraday data processing completed.")
+    return df
+
+def process_hourly_data(df):
+    """
+    Preprocess hourly data:
+    - Parse timestamps
+    - Handle missing data
+    - Ensure consistent frequency
+    """
+    logging.info("Processing hourly data.")
+    # Parse timestamps
+    df['timestamp'] = df['timestamp'].apply(parse_timestamp)
+    unparsed = df['timestamp'].isnull().sum()
+    if unparsed > 0:
+        logging.warning(f"{unparsed} timestamps couldn't be parsed and are set to NaT.")
+
+    # Remove rows with unparseable dates
+    df = df.dropna(subset=['timestamp'])
+    if df.empty:
+        logging.error("All hourly timestamps are invalid after parsing.")
+        return None
+
+    # Sort data by timestamp
+    df = df.sort_values('timestamp')
+
+    # Set timestamp as index
+    df = df.set_index('timestamp')
+
+    # Ensure there is an 'ATR' column
+    if 'ATR' not in df.columns:
+        logging.error("The 'ATR' column is missing from the hourly ATR data.")
+        return None
+
+    # Handle missing timestamps by setting consistent frequency (Assuming hourly frequency 'H')
+    df = df.asfreq('H')
+
+    # Forward fill missing values
+    df = df.fillna(method='ffill')
+
+    logging.info("Hourly data processing completed.")
+    return df
+
+def process_monthly_data(df):
+    """
+    Preprocess monthly data:
+    - Parse dates
+    - Handle missing data
+    - Ensure consistent frequency
+    """
+    logging.info("Processing monthly data.")
+    # Rename columns if necessary (assuming no numerical prefixes)
+    # Parse dates
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date')
+    df = df.set_index('date')
+
+    # Ensure there is a 'value' column
+    if 'value' not in df.columns:
+        logging.error("The 'value' column is missing from the monthly data.")
+        return None
+
+    # Handle missing timestamps by setting consistent frequency
+    df = df.asfreq('MS')  # Month Start frequency
+
+    # Forward fill missing values
+    df = df.fillna(method='ffill')
+
+    logging.info("Monthly data processing completed.")
+    return df
+
+def process_quarterly_data(df):
+    """
+    Preprocess quarterly data:
+    - Rename columns if necessary
+    - Parse dates
+    - Handle missing data
+    - Ensure consistent frequency
+    """
+    logging.info("Processing quarterly data.")
+    # Rename columns if necessary (assuming no numerical prefixes)
+    # Parse dates
+    df['fiscalDateEnding'] = pd.to_datetime(df['fiscalDateEnding'])
+    df = df.sort_values('fiscalDateEnding')
+    df = df.set_index('fiscalDateEnding')
+
+    # Ensure required columns exist
+    required_columns = ['netIncome']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logging.error(f"Missing columns in quarterly data: {missing_columns}")
+        return None
+
+    # Handle missing timestamps by setting consistent frequency
+    df = df.asfreq('QS')  # Quarter Start frequency
+
+    # Forward fill missing values
+    df = df.fillna(method='ffill')
+
+    logging.info("Quarterly data processing completed.")
+    return df
+
+def fetch_and_process_data(engine):
+    """
+    Fetch data from all tables and process them based on their frequency.
+    
+    Returns:
+        dict: A dictionary containing processed DataFrames categorized by frequency.
+    """
+    logging.info("Fetching and processing all data.")
+
+    table_frequencies = {
+        'combined_intraday_data': 'intraday',
+        'hourly_atr_data': 'hourly',
+        'hourly_bbands_data': 'hourly',  # Assuming 'hourly_bbands_data' is hourly
+        'hourly_macd_data': 'hourly',    # Assuming 'hourly_macd_data' is hourly
+        'hourly_rsi_data': 'hourly',     # Assuming 'hourly_rsi_data' is hourly
+        'hourly_vwap_data': 'hourly',    # Assuming 'hourly_vwap_data' is hourly
+        'monthly_cpi_data': 'monthly',
+        'monthly_federal_funds_rate_data': 'monthly',
+        'monthly_unemployment_data': 'monthly',
+        'annual_income_statement_data': 'quarterly',
+        'quarterly_earnings_data': 'quarterly',
+    }
+
+    processed_data = {
+        'intraday': [],
+        'hourly': [],
+        'monthly': [],
+        'quarterly': [],
+        'other': []
+    }
+
+    for table_name, freq in table_frequencies.items():
+        df = fetch_data(table_name, engine)
+        if df is None:
+            logging.error(f"DataFrame for table '{table_name}' is None. Skipping.")
+            continue
+
+        if freq == 'intraday':
+            processed_df = process_intraday_data(df)
+            if processed_df is not None:
+                processed_data['intraday'].append(processed_df)
+        elif freq == 'hourly':
+            processed_df = process_hourly_data(df)
+            if processed_df is not None:
+                processed_data['hourly'].append(processed_df)
+        elif freq == 'monthly':
+            processed_df = process_monthly_data(df)
+            if processed_df is not None:
+                processed_data['monthly'].append(processed_df)
+        elif freq == 'quarterly':
+            processed_df = process_quarterly_data(df)
+            if processed_df is not None:
+                processed_data['quarterly'].append(processed_df)
+        else:
+            logging.warning(f"Unknown frequency '{freq}' for table '{table_name}'. Adding to 'other'.")
+            processed_data['other'].append(df)
+
+    # Concatenate dataframes within each frequency
+    for freq in ['intraday', 'hourly', 'monthly', 'quarterly']:
+        if processed_data[freq]:
+            processed_data[freq] = pd.concat(processed_data[freq], axis=0)
+            logging.info(f"Concatenated {len(processed_data[freq])} DataFrames for frequency '{freq}'.")
+        else:
+            processed_data[freq] = None
+            logging.warning(f"No DataFrames found for frequency '{freq}'.")
+
+    return processed_data
+
 def debug_print_random_table(table_names, engine):
     """
     Print the first 10 lines of a random table.
@@ -100,6 +346,10 @@ def main():
         engine = create_db_engine()
         logging.info(f"Engine type in main: {type(engine)}")  # Added logging
 
+        # Fetch and process all data
+        processed_data = fetch_and_process_data(engine)
+
+        # Debug: Print first 10 lines of a random table
         table_names = [
             "annual_income_statement_data",
             "combined_intraday_data",
@@ -113,16 +363,6 @@ def main():
             "monthly_unemployment_data",
             "quarterly_earnings_data"
         ]
-
-        for table in table_names:
-            df = fetch_data(table, engine)
-            if df is not None:
-                # Further processing as needed
-                pass
-            else:
-                logging.error(f"Failed to process table: {table}")
-
-        # Debug: Print first 10 lines of a random table
         debug_print_random_table(table_names, engine)
 
     except Exception as e:
