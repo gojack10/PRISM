@@ -7,23 +7,19 @@ PRISM is a data-driven stock analysis and prediction system that combines tradit
 ## Key Components
 
 1. **Data Collection**
-   - `alpha_vantage_intraday.py`: Fetches daily stock price data
-   - `alpha_vantage_indicators.py`: Retrieves technical indicators (SMA, MACD, RSI, BBANDS, OBV, CCI)
-   - `alpha_vantage_overview.py`: Collects company overview data (P/E ratio, market cap, etc.)
-   - `alpha_vantage_sentiment.py`: Gathers news sentiment data
+   - `market_data_collection.py`: Fetches various financial data including intraday prices, earnings, income statements, and technical indicators
+   - `alpha_vantage_sentiment.py`: Gathers news sentiment data (not shown in the provided code snippets)
 
 2. **Data Processing**
-   - `sentiment_json_to_claude.py`: Processes raw sentiment data using the Claude AI model
-   - `database_builder.py`: Consolidates all collected data into a SQLite database
+   - `database_builder.py`: Consolidates all collected data into a PostgreSQL database
+   - `data_loader.py`: Loads and preprocesses data from the database for model training
 
 3. **Machine Learning**
-   - `data_loader.py`: Loads processed data from the SQLite database
-   - `model.py`: Defines and trains an XGBoost model for stock price prediction
-   - `eval.py`: Evaluates model performance and performs hyperparameter tuning
-   - `run_model.py`: Orchestrates the entire modeling process
+   - `model_training.py`: Defines and trains an N-BEATS model for stock price prediction
+   - `eval.py`: Evaluates model performance (not shown in the provided code snippets)
 
 4. **Utilities**
-   - `database_update.py`: Manages the overall data update process
+   - `database_update.py`: Manages the overall data update process (not shown in the provided code snippets)
 
 ## Setup and Usage
 
@@ -33,31 +29,31 @@ PRISM is a data-driven stock analysis and prediction system that combines tradit
    ```
 
 2. Configure the project:
-   - Set up your Alpha Vantage API key in `config/.env`
-   - Adjust settings in `config/config.yaml`:
-```
-   tickers:
-  - EX
-  - EX
-  - EX
-```
+   - Set up your Alpha Vantage API key and database credentials in `config/.env`
+   - Adjust settings in `config/config.yaml` to specify the tickers you want to analyze
 
-3. Run the data update process:
+3. Run the data collection process:
    ```
-   python src/database_update.py
+   python src/data_collection/market_data_collection.py
    ```
 
-4. Train and evaluate the model:
+4. Build the database:
    ```
-   python src/run_model.py
+   python src/database_builder.py
+   ```
+
+5. Train and evaluate the model:
+   ```
+   python src/models/testing/model_training.py
    ```
 
 ## Current State and Limitations
 
-- Collects and processes various types of financial data.
-- An XGBoost model is implemented for stock price prediction, with basic feature importance analysis and hyperparameter tuning.
+- Collects and processes various types of financial data, including intraday prices, technical indicators, earnings, and economic indicators.
+- An N-BEATS model is implemented for stock price prediction, leveraging the Darts library for time series forecasting.
 - The system is set up to handle multiple stock tickers as defined in the configuration.
-- Sentiment analysis using the Claude AI API is integrated
+- Data is stored in a PostgreSQL database for efficient retrieval and processing.
+- Implements rate limiting to respect API constraints.
 
 Please note:
 - The project is still in development and may require further refinement and testing.
