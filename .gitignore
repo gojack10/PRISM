@@ -9,3 +9,4 @@
 /graph-output/
 
 model_training.log
+/lightning_logs/
