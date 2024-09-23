@@ -75,16 +75,6 @@ def fetch_data(table_name, engine):
         logging.error(f"Error fetching data from {table_name}: {e}")
         return None
 
-def convert_timestamps_to_unix(df):
-    if df is None:
-        logging.error("DataFrame is None. Cannot convert timestamps.")
-        return None
-    timestamp_cols = df.select_dtypes(include=['datetime64[ns]', 'object']).columns
-    for col in timestamp_cols:
-        if pd.api.types.is_datetime64_ns_dtype(df[col]):
-            df[col] = df[col].astype(int) / 10**9  # Convert to UNIX timestamp
-    return df
-
 def debug_print_random_table(table_names, engine):
     """
     Print the first 10 lines of a random table.
@@ -127,8 +117,8 @@ def main():
         for table in table_names:
             df = fetch_data(table, engine)
             if df is not None:
-                df = convert_timestamps_to_unix(df)
                 # Further processing as needed
+                pass
             else:
                 logging.error(f"Failed to process table: {table}")
 
