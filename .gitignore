@@ -7,3 +7,5 @@
 /src/models/testing/test.py
 
 /graph-output/
+
+model_training.log
