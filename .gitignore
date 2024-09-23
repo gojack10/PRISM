@@ -4,5 +4,8 @@
 .DS_Store
 
 /src/models/testing/__pycache__
+/src/models/testing/test.py
 
 /graph-output/
+
+model_training.log

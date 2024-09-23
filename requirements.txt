@@ -9,3 +9,8 @@ matplotlib
 sqlalchemy
 ratelimit
 tqdm
+pycaret
+beautifulsoup4
+stweet 
+pmaw
+psycopg2-binary
