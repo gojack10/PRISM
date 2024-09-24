@@ -5,6 +5,9 @@ import random
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
+from darts.models import NBEATSModel
+from darts.metrics import mape, smape, mae
+from darts import TimeSeries
 
 # Configure logging
 logging.basicConfig(
@@ -145,11 +148,11 @@ def process_intraday_data(df):
         logging.error("The 'close' column is missing from the intraday data.")
         return None
 
-    # Handle missing timestamps by setting consistent frequency (Assuming hourly frequency 'H')
-    df = df.asfreq('H')
+    # Handle missing timestamps by setting consistent frequency ('h' for hourly)
+    df = df.asfreq('h')
 
     # Forward fill missing values
-    df = df.fillna(method='ffill')
+    df = df.ffill()
 
     logging.info("Intraday data processing completed.")
     return df
@@ -185,11 +188,11 @@ def process_hourly_data(df):
         logging.error("The 'ATR' column is missing from the hourly ATR data.")
         return None
 
-    # Handle missing timestamps by setting consistent frequency (Assuming hourly frequency 'H')
-    df = df.asfreq('H')
+    # Handle missing timestamps by setting consistent frequency ('h' for hourly)
+    df = df.asfreq('h')
 
     # Forward fill missing values
-    df = df.fillna(method='ffill')
+    df = df.ffill()
 
     logging.info("Hourly data processing completed.")
     return df
@@ -217,7 +220,7 @@ def process_monthly_data(df):
     df = df.asfreq('MS')  # Month Start frequency
 
     # Forward fill missing values
-    df = df.fillna(method='ffill')
+    df = df.ffill()
 
     logging.info("Monthly data processing completed.")
     return df
@@ -248,7 +251,7 @@ def process_quarterly_data(df):
     df = df.asfreq('QS')  # Quarter Start frequency
 
     # Forward fill missing values
-    df = df.fillna(method='ffill')
+    df = df.ffill()
 
     logging.info("Quarterly data processing completed.")
     return df

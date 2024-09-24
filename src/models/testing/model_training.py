@@ -182,11 +182,11 @@ def main():
         logging.info("Starting hyperparameter tuning...")
         from darts.metrics import mape
 
-        best_model, best_params = NBEATSModel.gridsearch(
+        grid_search_result = NBEATSModel.gridsearch(
             parameters=parameter_grid,
             series=train,
             val_series=val,
-            metric='val_loss',
+            metric=mape,  # Use the callable metric function
             reduction=np.mean,
             verbose=True,
             n_jobs=1,
@@ -194,6 +194,10 @@ def main():
                 "val_series": val
             }
         )
+
+        # Extract the best model and best parameters from the result
+        best_model = grid_search_result['best_model']
+        best_params = grid_search_result['best_params']
 
         logging.info(f"Best parameters found: {best_params}")
         logging.info("Hyperparameter tuning completed.")
