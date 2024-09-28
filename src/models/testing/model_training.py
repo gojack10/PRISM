@@ -7,6 +7,7 @@ from darts.models import NBEATSModel
 from darts.utils.utils import SeasonalityMode, TrendMode, ModelMode
 import torch
 import matplotlib.pyplot as plt
+from pytorch_lightning import Trainer  # <-- Added import
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torchmetrics import MeanAbsolutePercentageError, MeanAbsoluteError, MeanSquaredError
 
@@ -16,6 +17,9 @@ from data_loader import (
     create_db_engine,
     fetch_and_process_data,
 )
+
+# Import custom callbacks
+from callbacks import LossHistoryCallback  # Ensure correct import path
 
 # Configure logging
 logging.basicConfig(
@@ -128,7 +132,10 @@ def main():
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logging.info(f"Using device: {device}")  # Optional: Log the device being used
 
-        # Define callbacks for the main Trainer
+        # Initialize the custom callback
+        loss_history = LossHistoryCallback()
+
+        # Define callbacks for the main Trainer, including the custom callback
         checkpoint_callback = ModelCheckpoint(
             monitor='val_loss',
             save_top_k=1,
@@ -142,17 +149,15 @@ def main():
             mode='min'
         )
 
-        # Define PyTorch Lightning Trainer with GPU usage
-        from pytorch_lightning import Trainer
-
+        # Initialize Trainer with corrected precision
         trainer = Trainer(
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
             devices=1,
             precision='64-true', 
-            max_epochs=None,
+            max_epochs=100,
             enable_progress_bar=True,
             logger=True,
-            callbacks=[checkpoint_callback, early_stopping_callback]
+            callbacks=[checkpoint_callback, early_stopping_callback, loss_history]
         )
         
         # Instantiate the custom model
@@ -162,13 +167,18 @@ def main():
             n_epochs=100,
         )
 
-        # Define parameter grid (excluding callbacks)
+        # Define independent learning rates
+        learning_rates = [0.001, 0.002]
+
+        # Define parameter grid as a dictionary
         parameter_grid = {
             "input_chunk_length": [14, 30],
             "output_chunk_length": [7, 14],
             "num_stacks": [2, 3],
             "num_blocks": [1, 2],
+            "batch_size": [256, 512],
             "random_state": [42],
+            "optimizer_kwargs": [{"lr": lr} for lr in learning_rates],
             "pl_trainer_kwargs": [{
                 "accelerator": "gpu" if torch.cuda.is_available() else "cpu",
                 "devices": 1,
@@ -182,29 +192,27 @@ def main():
         logging.info("Starting hyperparameter tuning...")
         from darts.metrics import mape
 
-        grid_search_result = NBEATSModel.gridsearch(
+        # Unpack the grid search result
+        best_model, best_parameters, best_score = NBEATSModel.gridsearch(
             parameters=parameter_grid,
             series=train,
             val_series=val,
             metric=mape,  # Use the callable metric function
             reduction=np.mean,
             verbose=True,
-            n_jobs=1,
-            fit_kwargs={
-                "val_series": val
-            }
+            n_jobs=1
         )
 
-        # Extract the best model and best parameters from the result
-        best_model = grid_search_result['best_model']
-        best_params = grid_search_result['best_params']
-
-        logging.info(f"Best parameters found: {best_params}")
+        logging.info(f"Best parameters found: {best_parameters}")
+        logging.info(f"Best score (MAPE): {best_score}")
         logging.info("Hyperparameter tuning completed.")
+        
+        # Train the best model (since gridsearch returns an untrained model)
+        best_model.fit(train)
         
         # Use the best model for forecasting
         forecast = best_model.predict(n=7)
-        
+
         # Evaluate the best model
         from darts.metrics import mae, mape, rmse
         
@@ -216,11 +224,11 @@ def main():
         logging.info(f"Best Model Evaluation MAPE: {evaluation_mape}")
         logging.info(f"Best Model Evaluation RMSE: {evaluation_rmse}")
         
-        # Plot Training and Validation Loss Over Epochs
+        # After training, access the stored losses
+        epochs = range(1, len(loss_history.train_losses) + 1)
         plt.figure(figsize=(10, 5))
-        epochs = range(1, len(best_model.trainer.callback_metrics['train_loss']) + 1)
-        plt.plot(epochs, best_model.trainer.callback_metrics['train_loss'], label='Training Loss')
-        plt.plot(epochs, best_model.trainer.callback_metrics['val_loss'], label='Validation Loss')
+        plt.plot(epochs, loss_history.train_losses, label='Training Loss')
+        plt.plot(epochs, loss_history.val_losses, label='Validation Loss')
         plt.title('Training and Validation Loss Over Epochs')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
@@ -290,8 +298,8 @@ def main():
         plt.show()
 
         # After training, you can access all logged metrics
-        for metric_name, metric_values in trainer.callback_metrics.items():
-            print(f"Final {metric_name}: {metric_values[-1]}")
+        for metric_name, metric_value in best_model.trainer.callback_metrics.items():
+            print(f"Final {metric_name}: {metric_value}")
 
     except Exception as e:
         logging.exception(f"An unexpected error occurred: {e}")
